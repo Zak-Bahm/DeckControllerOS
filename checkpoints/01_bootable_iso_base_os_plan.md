@@ -11,14 +11,14 @@ Pinned Buildroot version: **2025.11** (submodule).
 - The exact tag/commit is documented in `README.md`.
 
 ### Step 2 — Set up out-of-tree build output
-- [ ] Done
+- [x] Done
 **Complete when:**
 - `out/` is gitignored.
 - Buildroot output is configured to live under `out/buildroot` (via `O=...`).
 - The build layout is documented in `README.md`.
 
 ### Step 3 — Create Buildroot defconfig
-- [ ] Done
+- [x] Done
 **Complete when:**
 - `configs/buildroot/controlleros_defconfig` exists and targets x86_64.
 - The defconfig enables:
@@ -28,7 +28,7 @@ Pinned Buildroot version: **2025.11** (submodule).
 - `BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE` points to `configs/kernel/steamdeck_defconfig`.
 
 ### Step 4 — Create kernel defconfig
-- [ ] Done
+- [x] Done
 **Complete when:**
 - `configs/kernel/steamdeck_defconfig` exists.
 - Kernel boots to a TTY shell on Steam Deck hardware.
