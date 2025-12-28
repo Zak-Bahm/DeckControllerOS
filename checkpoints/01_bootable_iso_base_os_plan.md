@@ -5,7 +5,7 @@ Pinned Buildroot version: **2025.11** (submodule).
 ## Plan (incremental)
 
 ### Step 1 — Pin Buildroot 2025.11 as submodule
-- [ ] Done
+- [x] Done
 **Complete when:**
 - `buildroot/` exists as a git submodule pointing to the Buildroot 2025.11 tag or commit.
 - The exact tag/commit is documented in `README.md`.
