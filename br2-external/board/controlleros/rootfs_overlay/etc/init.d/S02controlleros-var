@@ -1,0 +1,5 @@
+#!/bin/sh
+
+# Ensure runtime state directory exists and is writable.
+mkdir -p /var/lib/controlleros
+chmod 755 /var/lib/controlleros

@@ -35,7 +35,7 @@ Pinned Buildroot version: **2025.11** (submodule).
 - Required minimal support for booting a live ISO is present (x86_64, EFI/bootloader as needed).
 
 ### Step 5 — Rootfs identity and writable state path
-- [ ] Done
+- [x] Done
 **Complete when:**
 - Target image contains `/etc/os-release` with ControllerOS identity.
 - `/var/lib/controlleros` exists and is writable at runtime.
