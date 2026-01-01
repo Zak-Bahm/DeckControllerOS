@@ -4,6 +4,12 @@
 
 This repo vendors Buildroot as a submodule pinned to tag `2025.11` (commit `08d71521d3`).
 
+## Build prerequisites
+
+- Standard Buildroot host dependencies (see Buildroot manual for your distro)
+- `git` with submodule support
+- `make`, `gcc`, `g++`, `python3`, `tar`, `xz`, `rsync`
+
 ## Build output layout
 
 All Buildroot output is placed under `out/buildroot` using the out-of-tree build option (`O=out/buildroot`).

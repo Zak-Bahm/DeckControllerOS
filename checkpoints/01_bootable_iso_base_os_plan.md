@@ -41,14 +41,14 @@ Pinned Buildroot version: **2025.11** (submodule).
 - `/var/lib/controlleros` exists and is writable at runtime.
 
 ### Step 6 — Single entry build script
-- [ ] Done
+- [x] Done
 **Complete when:**
 - `scripts/build.sh` exists and is executable.
 - Running `./scripts/build.sh` produces `out/controlleros.iso` (or `.img`).
 - Build script uses the defconfig and out-of-tree build output.
 
 ### Step 7 — Documentation and hardware matrix
-- [ ] Done
+- [x] Done
 **Complete when:**
 - `README.md` documents prerequisites, build steps, and Steam Deck boot steps.
 - `docs/hw-matrix.md` exists with a placeholder entry for Steam Deck model and boot results.
