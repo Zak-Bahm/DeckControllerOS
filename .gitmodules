@@ -1,3 +1,5 @@
 [submodule "buildroot"]
 	path = buildroot
+	# using tag 25.11
 	url = https://gitlab.com/buildroot.org/buildroot.git
+	ignore = dirty
