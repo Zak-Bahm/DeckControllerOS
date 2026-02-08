@@ -1,0 +1,54 @@
+#!/bin/sh
+#
+# messagebus:   The D-BUS systemwide message bus
+#
+# processname: dbus-daemon
+# pidfile: /run/messagebus.pid
+#
+
+DAEMON="dbus-daemon"
+PIDFILE="/run/messagebus.pid"
+
+start() {
+	printf "Starting system message bus: "
+
+	# Ensure runtime directories exist.
+	mkdir -p /run/dbus /var/lock/subsys /tmp/dbus
+
+	dbus-uuidgen --ensure
+	$DAEMON --system
+	status=$?
+	echo "done"
+	[ "$status" -eq 0 ] && touch /var/lock/subsys/dbus-daemon
+	return "$status"
+}
+
+stop() {
+	printf "Stopping system message bus: "
+
+	killall $DAEMON
+	status=$?
+	echo "done"
+	if [ "$status" -eq 0 ]; then
+		rm -f /var/lock/subsys/dbus-daemon
+		rm -f "$PIDFILE"
+	fi
+	return "$status"
+}
+
+restart() {
+	stop
+	start
+}
+
+case "$1" in
+	start|stop|restart)
+		"$1";;
+	reload)
+		echo "Message bus can't reload its configuration, restart it"
+		exit 0
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart|reload}"
+		exit 1
+esac
