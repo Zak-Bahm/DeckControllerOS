@@ -144,3 +144,10 @@ Expected success output includes:
 - `report_len=<n>`
 - `UHID OK`
 - `pattern_run=OK duration=<s>s`
+
+## Buildroot image integration (checkpoint 03 step 6)
+
+`./scripts/build.sh` now installs these artifacts into the image:
+- `/usr/bin/hidd`
+- `/usr/bin/controllerosctl`
+- `/etc/controlleros/hid.toml`

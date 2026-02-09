@@ -31,3 +31,7 @@ cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/dev/controlleros-dev-list" \
 	"${TARGET_DIR}/usr/bin/controlleros-dev-list"
 chmod 0755 "${TARGET_DIR}/usr/bin/controlleros-dev-update" \
 	"${TARGET_DIR}/usr/bin/controlleros-dev-list"
+
+mkdir -p "${TARGET_DIR}/etc/controlleros"
+cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/hid/hid.toml" \
+	"${TARGET_DIR}/etc/controlleros/hid.toml"

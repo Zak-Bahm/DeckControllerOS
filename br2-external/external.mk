@@ -1,1 +1,1 @@
-# External tree for ControllerOS (no custom packages yet).
+include $(sort $(wildcard $(BR2_EXTERNAL_CONTROLLEROS_PATH)/package/*/*.mk))

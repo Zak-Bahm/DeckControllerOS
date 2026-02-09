@@ -81,7 +81,7 @@
 - Command is exercised on Deck using Loop 2 updates before image integration.
 
 ### Step 6 — Buildroot image integration for Rust binaries
-- [ ] Pending
+- [x] Done (2026-02-09)
 **Actions:**
 - Extend Buildroot config/package integration so `hidd` and `controllerosctl` are built and installed into the image.
 - Ensure runtime files (`configs/hid/hid.toml`) are included in rootfs.

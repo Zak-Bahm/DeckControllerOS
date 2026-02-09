@@ -1,1 +1,3 @@
-# External tree for ControllerOS (no custom packages yet).
+menu "ControllerOS packages"
+	source "$BR2_EXTERNAL_CONTROLLEROS_PATH/package/Config.in"
+endmenu

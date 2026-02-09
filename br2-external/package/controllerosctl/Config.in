@@ -1,0 +1,7 @@
+config BR2_PACKAGE_CONTROLLEROSCTL
+	bool "controllerosctl"
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+	select BR2_PACKAGE_HOST_RUSTC
+	select BR2_PACKAGE_CONTROLLEROS_HIDD
+	help
+	  ControllerOS diagnostics and self-test CLI.
