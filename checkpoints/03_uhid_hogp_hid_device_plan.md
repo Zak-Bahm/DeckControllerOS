@@ -59,7 +59,7 @@
 - Config can be updated on Deck through Loop 2 payload updates.
 
 ### Step 4 — Implement `hidd` daemon (UHID registration + report loop)
-- [ ] Pending
+- [x] Done (2026-02-09)
 **Actions:**
 - Implement UHID device creation via `/dev/uhid`.
 - Register one gamepad HID descriptor and emit reports at a stable cadence from config.
@@ -71,7 +71,7 @@
 - Runtime iteration is validated through Loop 2 without reboot.
 
 ### Step 5 — Implement `controllerosctl hid self-test`
-- [ ] Pending
+- [x] Done (2026-02-09)
 **Actions:**
 - Add `controllerosctl` command path: `hid self-test`.
 - Print `UHID OK`, descriptor length, and report length.
@@ -93,9 +93,13 @@
 - [ ] Pending
 **Actions:**
 - Add init script (or systemd unit) to start `hidd` after Bluetooth stack readiness.
+- Wire BlueZ HID profile exposure so the Deck is connectable as a single Bluetooth gamepad device (Xbox-style layout semantics via the HID descriptor already defined in `common`).
+- Ensure pairing/connection policy supports trusted hosts reconnecting without manual intervention.
 - Ensure only one HID gamepad service instance is launched.
 **Complete when:**
 - After boot, `hidd` is running and prepared to emit reports for a paired host.
+- A paired host can fully connect and keep an active controller session (not just bond).
+- Host enumerates the Deck as a game controller and receives changing reports.
 - Service behavior is first validated with Loop 2 manual restart, then confirmed after reboot once.
 
 ### Step 8 — Checkpoint documentation and reproducible self-check flow

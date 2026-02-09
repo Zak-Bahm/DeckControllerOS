@@ -118,3 +118,29 @@ Expected result:
 Failure behavior:
 - Invalid config prints a clear `hidd: invalid HID config: ...` error
 - Exits non-zero
+
+## HID self-test command (checkpoint 03 step 5)
+
+Run from host workspace (uses local binaries):
+
+```bash
+cargo run -p controllerosctl -- \
+  hid self-test \
+  --hidd target/debug/hidd \
+  --config configs/hid/hid.toml
+```
+
+Run on Deck after Dev Loop 2 update:
+
+```bash
+/var/lib/controlleros/dev/bin/controllerosctl \
+  hid self-test \
+  --hidd /var/lib/controlleros/dev/bin/hidd \
+  --config /var/lib/controlleros/dev/configs/hid/hid.toml
+```
+
+Expected success output includes:
+- `descriptor_len=<n>`
+- `report_len=<n>`
+- `UHID OK`
+- `pattern_run=OK duration=<s>s`

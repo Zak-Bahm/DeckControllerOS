@@ -8,8 +8,8 @@ mod tests {
     use super::hid::{InputReport, HID_REPORT_DESCRIPTOR, REPORT_ID};
 
     #[test]
-    fn descriptor_is_not_empty() {
-        assert!(!HID_REPORT_DESCRIPTOR.is_empty());
+    fn descriptor_has_expected_header_usage_page() {
+        assert_eq!(HID_REPORT_DESCRIPTOR[0], 0x05);
     }
 
     #[test]
