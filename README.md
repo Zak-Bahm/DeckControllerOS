@@ -72,3 +72,10 @@ cp out/buildroot/images/rootfs.iso9660 out/buildroot/images/controlleros.iso
   - Enables `Powered`, `Pairable`, and `Discoverable`
   - Writes logs to `scripts/bt_debug_YYYYMMDD_HHMMSS.log`
   - Restarts init-managed `bluetoothd` when you stop with `Ctrl+C`
+
+- Run checkpoint 02 self-check:
+```bash
+./scripts/bt_checkpoint02_selfcheck.sh --require-paired
+```
+- Expected result:
+  - `Checkpoint 02 self-check: PASS`

@@ -86,17 +86,28 @@
 - `/var/lib/bluetooth` persists across reboot in ControllerOS.
 
 ### Step 7 — Documentation for pairing and storage
-- [ ] Todo
+- [x] Done
 **Actions:**
 - Write `docs/pairing.md` with exact CLI steps and host expectations.
 - Write `docs/storage.md` describing where `/var/lib/bluetooth` lives and how it persists.
+**Implementation notes:**
+- Added `docs/pairing.md` with ControllerOS script flow, host `bluetoothctl`
+  flow, and debug capture commands.
+- Added `docs/storage.md` with mount design, boot ordering, override variables,
+  and reboot persistence verification steps.
 **Complete when:**
 - Docs exist and match scripts/behavior.
 
 ### Step 8 — Self-check instructions
-- [ ] Todo
+- [x] Done
 **Actions:**
 - Add checklist to docs or scripts to validate Powered/Discoverable/Pairable and persistence.
+**Implementation notes:**
+- Added `scripts/bt_checkpoint02_selfcheck.sh` to enforce:
+  - `Powered`, `Pairable`, and `Discoverable` states are `yes`
+  - mountpoints for `/var/lib/controlleros` and `/var/lib/bluetooth`
+  - optional paired-device assertions (`--require-paired`, `--expect-mac`)
+- Added reproducible checklist doc at `docs/checkpoint02_selfcheck.md`.
 **Complete when:**
 - Acceptance criteria steps are fully reproducible from repo content.
 
