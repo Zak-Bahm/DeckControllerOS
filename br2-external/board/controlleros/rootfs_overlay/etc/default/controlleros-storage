@@ -1,0 +1,6 @@
+# Optional override for Bluetooth bond persistence storage.
+# Defaults are in /etc/init.d/S35bluetooth-storage.
+#
+# CONTROLLEROS_DATA_DEV="/dev/disk/by-label/CTRL_OS_DATA"
+# CONTROLLEROS_DATA_FS="ext4"
+# CONTROLLEROS_DATA_WAIT_SECONDS="15"

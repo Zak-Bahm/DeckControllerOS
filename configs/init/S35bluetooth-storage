@@ -1,0 +1,79 @@
+#!/bin/sh
+
+DATA_MOUNT="/var/lib/controlleros"
+BLUETOOTH_DIR="/var/lib/bluetooth"
+DATA_BLUETOOTH_DIR="$DATA_MOUNT/bluetooth"
+DATA_DEV_DEFAULT="/dev/disk/by-label/CTRL_OS_DATA"
+DATA_DEV="$DATA_DEV_DEFAULT"
+DATA_FS="ext4"
+DATA_WAIT_SECONDS_DEFAULT=5
+DATA_WAIT_SECONDS="$DATA_WAIT_SECONDS_DEFAULT"
+
+# shellcheck source=/dev/null
+[ -r /etc/default/controlleros-storage ] && . /etc/default/controlleros-storage
+
+start() {
+	printf "Preparing bluetooth persistent storage: "
+
+	if [ -n "${CONTROLLEROS_DATA_DEV:-}" ]; then
+		DATA_DEV="$CONTROLLEROS_DATA_DEV"
+	fi
+	if [ -n "${CONTROLLEROS_DATA_FS:-}" ]; then
+		DATA_FS="$CONTROLLEROS_DATA_FS"
+	fi
+	if [ -n "${CONTROLLEROS_DATA_WAIT_SECONDS:-}" ]; then
+		DATA_WAIT_SECONDS="$CONTROLLEROS_DATA_WAIT_SECONDS"
+	fi
+	case "$DATA_WAIT_SECONDS" in
+		*[!0-9]*|"")
+			DATA_WAIT_SECONDS="$DATA_WAIT_SECONDS_DEFAULT"
+			;;
+	esac
+
+	mkdir -p "$DATA_MOUNT" "$BLUETOOTH_DIR"
+
+	if ! mountpoint -q "$DATA_MOUNT"; then
+		# On removable media, the block device may appear after this script starts.
+		# Wait a bounded amount of time so bluetoothd can use persistent bond storage.
+		wait_count=0
+		while [ ! -b "$DATA_DEV" ] && [ "$wait_count" -lt "$DATA_WAIT_SECONDS" ]; do
+			sleep 1
+			wait_count=$((wait_count + 1))
+		done
+
+		if [ ! -b "$DATA_DEV" ]; then
+			echo "FAIL"
+			echo "device $DATA_DEV unavailable after ${DATA_WAIT_SECONDS}s" >&2
+			return 1
+		fi
+
+		if ! mount -t "$DATA_FS" -o rw,noatime "$DATA_DEV" "$DATA_MOUNT"; then
+			echo "FAIL"
+			echo "failed to mount $DATA_DEV on $DATA_MOUNT" >&2
+			return 1
+		fi
+	fi
+
+	mkdir -p "$DATA_BLUETOOTH_DIR"
+	chmod 700 "$DATA_BLUETOOTH_DIR"
+	if ! mountpoint -q "$BLUETOOTH_DIR"; then
+		if ! mount --bind "$DATA_BLUETOOTH_DIR" "$BLUETOOTH_DIR"; then
+			echo "FAIL"
+			echo "failed to bind-mount $DATA_BLUETOOTH_DIR to $BLUETOOTH_DIR" >&2
+			return 1
+		fi
+	fi
+
+	echo "OK"
+	return 0
+}
+
+case "$1" in
+	start|"")
+		start
+		;;
+	*)
+		echo "Usage: $0 {start}"
+		exit 1
+		;;
+esac

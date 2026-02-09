@@ -10,6 +10,11 @@ BLUETOOTHD_ARGS="-n"
 
 start() {
 	printf 'Starting %s: ' "$DAEMON"
+	if ! mountpoint -q /var/lib/bluetooth; then
+		echo "FAIL"
+		echo "/var/lib/bluetooth is not mounted; refusing to start bluetoothd" >&2
+		return 1
+	fi
 	# shellcheck disable=SC2086 # we need the word splitting
 	start-stop-daemon --start --background --make-pidfile \
 		--pidfile "$PIDFILE" --exec "/usr/libexec/bluetooth/$DAEMON" \

@@ -52,7 +52,7 @@
 - Adapter powers on without manual commands.
 
 ### Step 5 — Add pairing and status scripts
-- [ ] Todo
+- [x] Done
 **Actions:**
 - Create `scripts/bt_pairing_mode.sh` to set discoverable + pairable.
 - Create `scripts/bt_show_status.sh` to show adapter state and paired devices.
@@ -61,10 +61,27 @@
 - Running `bt_pairing_mode.sh` results in Discoverable/Pairable yes.
 
 ### Step 6 — Ensure bond persistence storage
-- [ ] Todo
+- [x] Done
 **Actions:**
 - Define a persistent mount (partition/overlay) for `/var/lib/bluetooth`.
 - Mount it at boot before `bluetoothd` starts.
+**Implementation notes:**
+- Added init script `S35bluetooth-storage` to mount persistent data
+  (`/dev/disk/by-label/CTRL_OS_DATA` by default) at `/var/lib/controlleros`.
+- Added bind mount from `/var/lib/controlleros/bluetooth` to `/var/lib/bluetooth`
+  before `S40bluetoothd` starts.
+- Added optional override file `/etc/default/controlleros-storage` for custom
+  device/filesystem values.
+- Added bounded wait in `S35bluetooth-storage` for removable media device
+  enumeration before mount attempts.
+- Added mountpoint guard in `S40bluetoothd` so daemon startup fails if
+  `/var/lib/bluetooth` is not mounted.
+- Switched Buildroot `/dev` management to eudev to support `/dev/disk/by-*`
+  persistent identifiers.
+**Verification notes:**
+- Run `mount | grep -E '/var/lib/controlleros|/var/lib/bluetooth'` after boot.
+- Ensure `/var/lib/bluetooth` is a bind mount from `/var/lib/controlleros/bluetooth`.
+- Pair a host, reboot, then check `bluetoothctl devices Paired` still lists host.
 **Complete when:**
 - `/var/lib/bluetooth` persists across reboot in ControllerOS.
 
