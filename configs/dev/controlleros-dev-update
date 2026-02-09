@@ -1,0 +1,195 @@
+#!/bin/sh
+
+set -eu
+
+BASE_URL=""
+TARGET_ROOT="/var/lib/controlleros/dev"
+MANIFEST_NAME="manifest.txt"
+RESTART_CMD=""
+DRY_RUN=0
+
+usage() {
+	echo "Usage: $0 --base-url <http://host:port> [options]"
+	echo "Options:"
+	echo "  --base-url <url>       Base URL that serves manifest + payload files (required)"
+	echo "  --target-root <path>   Install root on Deck (default: /var/lib/controlleros/dev)"
+	echo "  --manifest <name>      Manifest filename (default: manifest.txt)"
+	echo "  --restart-cmd <cmd>    Command to run after successful update"
+	echo "  --dry-run              Validate downloads/hashes without installing"
+	echo "  -h, --help             Show help"
+}
+
+require_cmd() {
+	command -v "$1" >/dev/null 2>&1 || {
+		echo "error: required command not found: $1" >&2
+		exit 1
+	}
+}
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--base-url)
+			[ "$#" -ge 2 ] || {
+				echo "error: --base-url requires a value" >&2
+				usage >&2
+				exit 1
+			}
+			BASE_URL="$2"
+			shift 2
+			;;
+		--target-root)
+			[ "$#" -ge 2 ] || {
+				echo "error: --target-root requires a value" >&2
+				usage >&2
+				exit 1
+			}
+			TARGET_ROOT="$2"
+			shift 2
+			;;
+		--manifest)
+			[ "$#" -ge 2 ] || {
+				echo "error: --manifest requires a value" >&2
+				usage >&2
+				exit 1
+			}
+			MANIFEST_NAME="$2"
+			shift 2
+			;;
+		--restart-cmd)
+			[ "$#" -ge 2 ] || {
+				echo "error: --restart-cmd requires a value" >&2
+				usage >&2
+				exit 1
+			}
+			RESTART_CMD="$2"
+			shift 2
+			;;
+		--dry-run)
+			DRY_RUN=1
+			shift
+			;;
+		-h|--help)
+			usage
+			exit 0
+			;;
+		*)
+			echo "error: unknown argument: $1" >&2
+			usage >&2
+			exit 1
+			;;
+	esac
+done
+
+[ -n "$BASE_URL" ] || {
+	echo "error: --base-url is required" >&2
+	usage >&2
+	exit 1
+}
+
+require_cmd wget
+require_cmd sha256sum
+require_cmd awk
+require_cmd sed
+
+case "$BASE_URL" in
+	*/ ) BASE_URL="${BASE_URL%/}" ;;
+esac
+
+TMP_DIR="$(mktemp -d /tmp/controlleros-dev-update.XXXXXX)"
+trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+
+MANIFEST_PATH="$TMP_DIR/$MANIFEST_NAME"
+MANIFEST_URL="$BASE_URL/$MANIFEST_NAME"
+
+echo "Fetching manifest: $MANIFEST_URL"
+wget -q -O "$MANIFEST_PATH" "$MANIFEST_URL"
+
+if [ "$DRY_RUN" -eq 0 ]; then
+	mkdir -p "$TARGET_ROOT"
+fi
+
+UPDATED=0
+FAILED=0
+
+while IFS=' ' read -r MODE SHA REL_PATH REST; do
+	# Skip empty lines and comments
+	if [ -z "${MODE:-}" ]; then
+		continue
+	fi
+	case "$MODE" in
+		\#*) continue ;;
+	esac
+
+	if [ -n "${REST:-}" ] || [ -z "${SHA:-}" ] || [ -z "${REL_PATH:-}" ]; then
+		echo "error: invalid manifest line format: '$MODE $SHA $REL_PATH ${REST:-}'" >&2
+		FAILED=$((FAILED + 1))
+		continue
+	fi
+
+	case "$MODE" in
+		[0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) ;;
+		*)
+			echo "error: invalid mode '$MODE' for $REL_PATH" >&2
+			FAILED=$((FAILED + 1))
+			continue
+			;;
+	esac
+
+	case "$SHA" in
+		????????????????????????????????????????????????????????????????) ;;
+		*)
+			echo "error: invalid sha256 '$SHA' for $REL_PATH" >&2
+			FAILED=$((FAILED + 1))
+			continue
+			;;
+	esac
+
+	FILE_URL="$BASE_URL/$REL_PATH"
+	DOWNLOAD_PATH="$TMP_DIR/download.$$.$UPDATED"
+	echo "Fetching payload: $FILE_URL"
+	if ! wget -q -O "$DOWNLOAD_PATH" "$FILE_URL"; then
+		echo "error: failed to download $FILE_URL" >&2
+		FAILED=$((FAILED + 1))
+		continue
+	fi
+
+	CALC_SHA="$(sha256sum "$DOWNLOAD_PATH" | awk '{print $1}')"
+	if [ "$CALC_SHA" != "$SHA" ]; then
+		echo "error: checksum mismatch for $REL_PATH" >&2
+		echo "  expected: $SHA" >&2
+		echo "  actual:   $CALC_SHA" >&2
+		FAILED=$((FAILED + 1))
+		continue
+	fi
+
+	if [ "$DRY_RUN" -eq 1 ]; then
+		echo "Validated: $REL_PATH"
+		UPDATED=$((UPDATED + 1))
+		continue
+	fi
+
+	DEST_PATH="$TARGET_ROOT/$REL_PATH"
+	DEST_DIR="$(dirname "$DEST_PATH")"
+	TMP_DEST="$DEST_PATH.new.$$"
+
+	mkdir -p "$DEST_DIR"
+	cp -f "$DOWNLOAD_PATH" "$TMP_DEST"
+	chmod "$MODE" "$TMP_DEST"
+	mv -f "$TMP_DEST" "$DEST_PATH"
+	echo "Installed: $DEST_PATH"
+	UPDATED=$((UPDATED + 1))
+done < "$MANIFEST_PATH"
+
+if [ "$FAILED" -ne 0 ]; then
+	echo "Update failed: $FAILED item(s) had errors" >&2
+	exit 1
+fi
+
+echo "Update completed: $UPDATED item(s)"
+
+if [ "$DRY_RUN" -eq 0 ] && [ -n "$RESTART_CMD" ]; then
+	echo "Running restart command: $RESTART_CMD"
+	sh -c "$RESTART_CMD"
+fi
+
+exit 0

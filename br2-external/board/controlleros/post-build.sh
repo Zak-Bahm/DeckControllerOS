@@ -23,3 +23,11 @@ chmod 0755 "${TARGET_DIR}/etc/init.d/S20dbus-prep" \
 	"${TARGET_DIR}/etc/init.d/S35bluetooth-storage" \
 	"${TARGET_DIR}/etc/init.d/S40bluetoothd" \
 	"${TARGET_DIR}/etc/init.d/S41bluetooth-power"
+
+mkdir -p "${TARGET_DIR}/usr/bin"
+cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/dev/controlleros-dev-update" \
+	"${TARGET_DIR}/usr/bin/controlleros-dev-update"
+cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/dev/controlleros-dev-list" \
+	"${TARGET_DIR}/usr/bin/controlleros-dev-list"
+chmod 0755 "${TARGET_DIR}/usr/bin/controlleros-dev-update" \
+	"${TARGET_DIR}/usr/bin/controlleros-dev-list"

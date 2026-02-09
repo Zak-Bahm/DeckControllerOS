@@ -79,3 +79,26 @@ cp out/buildroot/images/rootfs.iso9660 out/buildroot/images/controlleros.iso
 ```
 - Expected result:
   - `Checkpoint 02 self-check: PASS`
+
+## Development loops (fast iteration)
+
+Use two loops to avoid frequent full image rebuild + reboot:
+
+- Host-only loop for `cargo fmt` / `clippy` / `test`
+- Live Deck update loop using local HTTP payload hosting
+
+Guide:
+
+- `docs/dev_testing_loops.md`
+
+Host helper scripts:
+
+```bash
+./scripts/dev_stage_payload.sh --hidd <path> --controllerosctl <path> [--hid-config <path>]
+./scripts/dev_http_serve.sh --dir out/dev-payload --port 8000
+```
+
+Deck-side scripts included in the ISO image:
+
+- `controlleros-dev-update`
+- `controlleros-dev-list`

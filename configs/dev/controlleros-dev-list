@@ -1,0 +1,17 @@
+#!/bin/sh
+
+set -eu
+
+TARGET_ROOT="${1:-/var/lib/controlleros/dev}"
+
+if [ ! -d "$TARGET_ROOT" ]; then
+	echo "No deployed dev payload at: $TARGET_ROOT"
+	exit 0
+fi
+
+echo "Deployed files under: $TARGET_ROOT"
+find "$TARGET_ROOT" -type f | sort | while IFS= read -r FILE; do
+	SHA="$(sha256sum "$FILE" | awk '{print $1}')"
+	MODE="$(stat -c '%a' "$FILE" 2>/dev/null || ls -l "$FILE" | awk '{print $1}')"
+	printf '%s  %s  %s\n' "$MODE" "$SHA" "$FILE"
+done
