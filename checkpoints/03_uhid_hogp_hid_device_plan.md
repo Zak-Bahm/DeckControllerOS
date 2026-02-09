@@ -49,7 +49,7 @@
 - Verified through Loop 1 only.
 
 ### Step 3 — Add HID runtime config
-- [ ] Pending
+- [x] Done (2026-02-09)
 **Actions:**
 - Create `configs/hid/hid.toml` with device name, vendor/product IDs, report rate, and pattern controls.
 - Add config parsing in Rust using `serde` + `toml`.

@@ -1,0 +1,12 @@
+[device]
+name = "ControllerOS Gamepad"
+vendor_id = 0x28de
+product_id = 0x1205
+
+[report]
+rate_hz = 125
+
+[pattern]
+kind = "button_toggle"
+button_index = 0
+period_reports = 30

@@ -26,6 +26,70 @@ require_cmd() {
 	}
 }
 
+extract_base_url_host() {
+	# Strip scheme, path, and optional port.
+	# Example: http://192.168.50.1:8000/path -> 192.168.50.1
+	echo "$1" | awk '
+		{
+			s = $0
+			sub(/^[a-zA-Z]+:\/\//, "", s)
+			sub(/\/.*/, "", s)
+			sub(/:[0-9]+$/, "", s)
+			print s
+		}
+	'
+}
+
+is_ipv4_addr() {
+	echo "$1" | awk -F. '
+		NF != 4 { exit 1 }
+		{
+			for (i = 1; i <= 4; i++) {
+				if ($i !~ /^[0-9]+$/ || $i < 0 || $i > 255) exit 1
+			}
+		}
+		END { exit 0 }
+	'
+}
+
+has_route_to_host() {
+	HOST="$1"
+	command -v ip >/dev/null 2>&1 || return 1
+	ip route get "$HOST" >/dev/null 2>&1
+}
+
+bootstrap_min_network_to_host() {
+	HOST="$1"
+
+	if has_route_to_host "$HOST"; then
+		return 0
+	fi
+
+	command -v ip >/dev/null 2>&1 || return 1
+
+	for IFACE in $(ls /sys/class/net 2>/dev/null); do
+		case "$IFACE" in
+			lo|sit0) continue ;;
+		esac
+
+		ip link set "$IFACE" up >/dev/null 2>&1 || true
+
+		# Try to obtain a lease quickly if a DHCP client is present.
+		if command -v udhcpc >/dev/null 2>&1; then
+			udhcpc -n -q -t 3 -T 2 -i "$IFACE" >/dev/null 2>&1 || true
+		elif command -v busybox >/dev/null 2>&1; then
+			busybox udhcpc -n -q -t 3 -T 2 -i "$IFACE" >/dev/null 2>&1 || true
+		fi
+
+		if has_route_to_host "$HOST"; then
+			echo "Network bootstrap succeeded on interface: $IFACE"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--base-url)
@@ -95,6 +159,16 @@ case "$BASE_URL" in
 	*/ ) BASE_URL="${BASE_URL%/}" ;;
 esac
 
+BASE_HOST="$(extract_base_url_host "$BASE_URL")"
+if is_ipv4_addr "$BASE_HOST"; then
+	if ! has_route_to_host "$BASE_HOST"; then
+		echo "No route to $BASE_HOST; attempting minimal network bootstrap..."
+		if ! bootstrap_min_network_to_host "$BASE_HOST"; then
+			echo "warning: automatic network bootstrap did not establish a route to $BASE_HOST" >&2
+		fi
+	fi
+fi
+
 TMP_DIR="$(mktemp -d /tmp/controlleros-dev-update.XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 
@@ -102,7 +176,15 @@ MANIFEST_PATH="$TMP_DIR/$MANIFEST_NAME"
 MANIFEST_URL="$BASE_URL/$MANIFEST_NAME"
 
 echo "Fetching manifest: $MANIFEST_URL"
-wget -q -O "$MANIFEST_PATH" "$MANIFEST_URL"
+if ! wget -q -O "$MANIFEST_PATH" "$MANIFEST_URL"; then
+	if is_ipv4_addr "$BASE_HOST"; then
+		echo "Initial manifest fetch failed; retrying after network bootstrap..."
+		bootstrap_min_network_to_host "$BASE_HOST" || true
+		wget -q -O "$MANIFEST_PATH" "$MANIFEST_URL"
+	else
+		exit 1
+	fi
+fi
 
 if [ "$DRY_RUN" -eq 0 ]; then
 	mkdir -p "$TARGET_ROOT"

@@ -102,3 +102,19 @@ Deck-side scripts included in the ISO image:
 
 - `controlleros-dev-update`
 - `controlleros-dev-list`
+
+## HID config validation (checkpoint 03)
+
+Validate the HID runtime config from the host workspace:
+
+```bash
+cargo run -p hidd -- --validate-config --config configs/hid/hid.toml
+```
+
+Expected result:
+- Prints `HID config OK: ...`
+- Exits with code `0`
+
+Failure behavior:
+- Invalid config prints a clear `hidd: invalid HID config: ...` error
+- Exits non-zero
