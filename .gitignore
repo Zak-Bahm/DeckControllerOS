@@ -2,3 +2,4 @@ out/
 *.iso
 *.iso9660
 *.img
+target/

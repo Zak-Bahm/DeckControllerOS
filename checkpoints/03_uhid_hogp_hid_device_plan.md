@@ -28,7 +28,7 @@
 ## Plan (incremental)
 
 ### Step 1 — Create Rust workspace and crate skeletons
-- [ ] Pending
+- [x] Done (2026-02-09)
 **Actions:**
 - Add workspace root `Cargo.toml`.
 - Create `crates/common`, `crates/hidd`, `crates/controllerosctl`.
@@ -39,7 +39,7 @@
 - Verified through Loop 1 only (no ISO rebuild required).
 
 ### Step 2 — Define HID profile and shared report types in `common`
-- [ ] Pending
+- [x] Done (2026-02-09)
 **Actions:**
 - Implement shared constants/types for report ID, descriptor bytes, and report struct size.
 - Add minimal unit tests validating descriptor/report lengths and packing assumptions.

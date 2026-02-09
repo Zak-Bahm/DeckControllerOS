@@ -1,0 +1,7 @@
+[workspace]
+members = [
+  "crates/common",
+  "crates/hidd",
+  "crates/controllerosctl",
+]
+resolver = "2"
