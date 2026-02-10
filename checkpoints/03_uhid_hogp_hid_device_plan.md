@@ -9,12 +9,16 @@
   - Host HTTP serving: `scripts/dev_http_serve.sh`
   - Deck live updater (in image): `controlleros-dev-update`, `controlleros-dev-list`
   - Workflow guide: `docs/dev_testing_loops.md`
-- [ ] Missing checkpoint-03 artifacts:
-  - No Rust workspace (`Cargo.toml`) or required crates (`crates/hidd`, `crates/controllerosctl`, `crates/common`).
-  - No HID config at `configs/hid/hid.toml`.
+- [x] Implemented checkpoint-03 artifacts:
+  - Rust workspace and required crates exist (`Cargo.toml`, `crates/common`, `crates/hidd`, `crates/controllerosctl`).
+  - HID config exists at `configs/hid/hid.toml`.
+  - Build integration installs `hidd`, `controllerosctl`, and `/etc/controlleros/hid.toml`.
+  - `controllerosctl hid self-test` exists and passes local quality gates.
+- [ ] Remaining gaps to close checkpoint 03:
   - No HID profile documentation at `docs/hid_profile.md`.
-  - No build integration to place Rust binaries in the image.
-  - No self-test command `controllerosctl hid self-test`.
+  - No boot-time `hidd` init integration yet (no `S45hidd` script in `configs/init/`).
+  - `hidd` currently exposes a generic gamepad descriptor, not an Xbox One BLE-compatible profile.
+  - `bluetoothd` currently starts with `--noplugin=input,hog`; HOGP exposure path needs explicit validation/update for host enumeration goals.
 
 ## Development Workflow (applies to every step)
 - Loop 1 (host-only, default):
@@ -89,42 +93,37 @@
 - `./scripts/build.sh` produces an image containing runnable `hidd` and `controllerosctl`.
 - This is the first step that requires the full rebuild/reboot loop.
 
-### Step 7 — Boot-time daemon integration
+### Step 7 — Update `hidd` to Xbox One BLE-compatible HID profile
+- [ ] Pending
+**Actions:**
+- Replace the current generic descriptor/report packing with an Xbox One BLE-compatible profile (default target: model 1708 compatibility).
+- Add shared report types/constants for Xbox-style report layout and report IDs while keeping a single HID interface.
+- Extend HID config schema with profile identity fields (VID/PID/version/profile mode), defaulting to Microsoft Xbox-compatible values.
+- Update UHID create payload fields to use configured version/identity values (remove hardcoded version assumptions).
+- Add minimal output-report handling in `hidd` (drain/log/drop safely; no haptics implementation in MVP).
+- Add `docs/hid_profile.md` documenting descriptor, report format, and known host behavior.
+- Extend `controllerosctl hid self-test` output with active profile + identity in addition to descriptor/report lengths.
+**Complete when:**
+- `controllerosctl hid self-test` prints Xbox profile identity and exits 0.
+- A paired host identifies the controller as Xbox-compatible (or platform-equivalent XInput-class BLE gamepad naming).
+- Host receives changing test-pattern input while using the Xbox profile.
+
+### Step 8 — Boot-time daemon integration and reproducible self-check flow
 - [ ] Pending
 **Actions:**
 - Add init script (or systemd unit) to start `hidd` after Bluetooth stack readiness.
-- Wire BlueZ HID profile exposure so the Deck is connectable as a single Bluetooth gamepad device (Xbox-style layout semantics via the HID descriptor already defined in `common`).
-- Ensure pairing/connection policy supports trusted hosts reconnecting without manual intervention.
-- Ensure only one HID gamepad service instance is launched.
+- Update Bluetooth daemon startup/config as needed so HID over GATT is exposed correctly during runtime.
+- Create script to run on host that tests current state end-to-end: pairing, connecting, receiving input test pattern.
 **Complete when:**
 - After boot, `hidd` is running and prepared to emit reports for a paired host.
 - A paired host can fully connect and keep an active controller session (not just bond).
 - Host enumerates the Deck as a game controller and receives changing reports.
-- Service behavior is first validated with Loop 2 manual restart, then confirmed after reboot once.
-
-### Step 8 — Checkpoint documentation and reproducible self-check flow
-- [ ] Pending
-**Actions:**
-- Add `docs/hid_profile.md` (required) with descriptor breakdown and report format.
-- Add checkpoint-03 runbook doc (e.g., `docs/checkpoint03_selfcheck.md`) covering Deck and host validation commands.
-- Update `README.md` with checkpoint-03 build/run/test commands and link to `docs/dev_testing_loops.md`.
-**Complete when:**
-- Documentation fully describes local self-test, host enumeration, and report-visibility validation.
-- Docs explicitly separate Loop 1, Loop 2, and full rebuild triggers.
-
-### Step 9 — Validation and quality gates
-- [ ] Pending
-**Actions:**
-- Run `cargo fmt`, `cargo clippy --all-targets --all-features`, and `cargo test`.
-- Run checkpoint self-test command on Deck target environment (Loop 2), then one final post-ISO validation boot.
-**Complete when:**
-- All quality gates pass cleanly.
-- Acceptance criteria A/B/C can be followed exactly from repo docs/scripts.
+- Service behavior is first validated with Loop 2 manual restart, then confirmed with host script.
 
 ---
 
 ## Acceptance Criteria Mapping
-- A. Local Self-Test (`controllerosctl hid self-test`): Steps 2, 4, 5, 8, 9
+- A. Local Self-Test (`controllerosctl hid self-test`): Steps 2, 4, 5, 7
 - B. Host Enumeration (controller appears on host): Steps 4, 6, 7, 8
 - C. Report Visibility (changing input observed): Steps 3, 4, 5, 7, 8
 
