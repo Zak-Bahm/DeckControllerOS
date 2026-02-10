@@ -95,13 +95,23 @@ Host helper scripts:
 
 ```bash
 ./scripts/dev_stage_payload.sh --hidd <path> --controllerosctl <path> [--hid-config <path>]
-./scripts/dev_http_serve.sh --dir out/dev-payload --port 8000
+./scripts/dev_http_serve.sh --dir out/dev-payload --logs-dir out/dev-logs --port 8000
 ```
 
 Deck-side scripts included in the ISO image:
 
 - `controlleros-dev-update`
 - `controlleros-dev-list`
+- `controlleros-dev-run`
+
+Upload Deck command logs to host during Loop 2:
+
+```bash
+controlleros-dev-run --server-url http://<DEV_MACHINE_IP>:8000 "bluetoothctl show && /etc/init.d/S45hidd status"
+```
+
+This sends full command output (`stdout` + `stderr`) to the dev server log
+endpoint (`/logs`) and stores logs under `out/dev-logs/` on the host.
 
 ## HID config validation (checkpoint 03)
 

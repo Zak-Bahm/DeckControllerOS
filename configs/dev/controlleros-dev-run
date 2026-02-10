@@ -1,0 +1,122 @@
+#!/bin/sh
+
+set -eu
+
+SERVER_URL=""
+ENDPOINT="/logs"
+COMMAND=""
+
+usage() {
+	echo "Usage: $0 --server-url <http://host:port> [--endpoint </path>] <shell-command>"
+	echo "Example:"
+	echo "  $0 --server-url http://192.168.1.10:8000 \"bluetoothctl show && /etc/init.d/S45hidd status\""
+}
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--server-url)
+			[ "$#" -ge 2 ] || {
+				echo "error: --server-url requires a value" >&2
+				usage >&2
+				exit 1
+			}
+			SERVER_URL="$2"
+			shift 2
+			;;
+		--endpoint)
+			[ "$#" -ge 2 ] || {
+				echo "error: --endpoint requires a value" >&2
+				usage >&2
+				exit 1
+			}
+			ENDPOINT="$2"
+			shift 2
+			;;
+		-h|--help)
+			usage
+			exit 0
+			;;
+		--)
+			shift
+			break
+			;;
+		-*)
+			echo "error: unknown argument: $1" >&2
+			usage >&2
+			exit 1
+			;;
+		*)
+			break
+			;;
+	esac
+done
+
+[ "$#" -ge 1 ] || {
+	echo "error: shell-command is required" >&2
+	usage >&2
+	exit 1
+}
+COMMAND="$*"
+
+[ -n "$SERVER_URL" ] || {
+	echo "error: --server-url is required" >&2
+	usage >&2
+	exit 1
+}
+
+case "$SERVER_URL" in
+	*/ ) SERVER_URL="${SERVER_URL%/}" ;;
+esac
+
+case "$ENDPOINT" in
+	/*) ;;
+	*) ENDPOINT="/$ENDPOINT" ;;
+esac
+
+POST_URL="$SERVER_URL$ENDPOINT"
+HOSTNAME="$(hostname 2>/dev/null || echo deck)"
+TIMESTAMP_UTC="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)"
+TMP_OUT="$(mktemp /tmp/controlleros-dev-run.out.XXXXXX)"
+TMP_PAYLOAD="$(mktemp /tmp/controlleros-dev-run.payload.XXXXXX)"
+trap 'rm -f "$TMP_OUT" "$TMP_PAYLOAD"' EXIT INT TERM
+
+set +e
+sh -c "$COMMAND" >"$TMP_OUT" 2>&1
+CMD_EXIT="$?"
+set -e
+
+{
+	printf 'timestamp_utc=%s\n' "$TIMESTAMP_UTC"
+	printf 'deck_host=%s\n' "$HOSTNAME"
+	printf 'command_exit_code=%s\n' "$CMD_EXIT"
+	printf 'command=%s\n' "$COMMAND"
+	printf '\n'
+	cat "$TMP_OUT"
+} >"$TMP_PAYLOAD"
+
+echo "Sending command output to: $POST_URL"
+
+if command -v curl >/dev/null 2>&1; then
+	curl -fsS -X POST \
+		-H "Content-Type: text/plain" \
+		-H "X-Deck-Host: $HOSTNAME" \
+		-H "X-Command-Exit-Code: $CMD_EXIT" \
+		-H "X-Command: $COMMAND" \
+		--data-binary "@$TMP_PAYLOAD" \
+		"$POST_URL" >/dev/null
+elif command -v wget >/dev/null 2>&1; then
+	if wget --help 2>&1 | grep -q -- '--post-file'; then
+		wget -q -O /dev/null --post-file="$TMP_PAYLOAD" "$POST_URL"
+	elif wget --help 2>&1 | grep -q -- '--method'; then
+		wget -q -O /dev/null --method=POST --body-file="$TMP_PAYLOAD" "$POST_URL"
+	else
+		echo "error: available wget does not support POST upload" >&2
+		exit 1
+	fi
+else
+	echo "error: need curl or wget to upload logs" >&2
+	exit 1
+fi
+
+echo "Command exit code: $CMD_EXIT"
+exit "$CMD_EXIT"

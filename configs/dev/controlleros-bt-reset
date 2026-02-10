@@ -1,0 +1,11 @@
+#!/bin/sh
+
+set -eu
+
+echo "Removing all paired BT devices..."
+bluetoothctl remove *
+
+echo "Setting up pairing mode..."
+bluetoothctl power on
+bluetoothctl pairable on
+bluetoothctl discoverable on

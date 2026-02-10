@@ -29,8 +29,11 @@ cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/dev/controlleros-dev-update"
 	"${TARGET_DIR}/usr/bin/controlleros-dev-update"
 cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/dev/controlleros-dev-list" \
 	"${TARGET_DIR}/usr/bin/controlleros-dev-list"
+cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/dev/controlleros-dev-run" \
+	"${TARGET_DIR}/usr/bin/controlleros-dev-run"
 chmod 0755 "${TARGET_DIR}/usr/bin/controlleros-dev-update" \
-	"${TARGET_DIR}/usr/bin/controlleros-dev-list"
+	"${TARGET_DIR}/usr/bin/controlleros-dev-list" \
+	"${TARGET_DIR}/usr/bin/controlleros-dev-run"
 
 mkdir -p "${TARGET_DIR}/etc/controlleros"
 cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/hid/hid.toml" \

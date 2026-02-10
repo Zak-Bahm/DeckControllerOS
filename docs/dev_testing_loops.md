@@ -55,8 +55,17 @@ This creates:
 ### 3) Host payload over HTTP
 
 ```sh
-./scripts/dev_http_serve.sh --dir out/dev-payload --port 8000 --bind 0.0.0.0
+./scripts/dev_http_serve.sh \
+  --dir out/dev-payload \
+  --logs-dir out/dev-logs \
+  --port 8000 \
+  --bind 0.0.0.0
 ```
+
+This serves payload files and accepts Deck log uploads at:
+
+- `POST http://<DEV_MACHINE_IP>:8000/logs`
+- stored on host under `out/dev-logs/`
 
 ### 4) Pull and apply update on Deck
 
@@ -94,6 +103,26 @@ By default, updates are installed under:
 - `/var/lib/controlleros/dev/configs/hid/hid.toml`
 
 No reboot is required for payload-only updates.
+
+## Deck remote command log upload
+
+`controlleros-dev-run` executes a shell command on the Deck and uploads full
+combined stdout/stderr output to the host dev server.
+
+Example:
+
+```sh
+controlleros-dev-run \
+  --server-url http://<DEV_MACHINE_IP>:8000 \
+  "bluetoothctl show && /etc/init.d/S45hidd restart && /var/lib/controlleros/dev/bin/controllerosctl hid self-test --hidd /var/lib/controlleros/dev/bin/hidd --config /var/lib/controlleros/dev/configs/hid/hid.toml"
+```
+
+Behavior:
+
+- runs the shell command exactly once
+- preserves the wrapped command exit code
+- uploads output to host `POST /logs`
+- host stores a timestamped log file under `out/dev-logs/`
 
 ## When You Still Need Rebuild + Reboot
 

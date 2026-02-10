@@ -3,3 +3,4 @@ out/
 *.iso9660
 *.img
 target/
+__pycache__/
