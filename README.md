@@ -1,5 +1,7 @@
 # ControllerOS
 
+Thanks to https://github.com/Mystfit/ESP32-BLE-CompositeHID for a great reference that helped a lot with getting the Xbox bluetooth setup working
+
 ## Buildroot pin
 
 This repo vendors Buildroot as a submodule pinned to tag `2025.11` (commit `08d71521d3`).
