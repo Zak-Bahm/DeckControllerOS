@@ -4,12 +4,14 @@ set -eu
 
 SERVER_URL=""
 ENDPOINT="/logs"
+TIMEOUT_SECONDS=""
 COMMAND=""
 
 usage() {
-	echo "Usage: $0 --server-url <http://host:port> [--endpoint </path>] <shell-command>"
+	echo "Usage: $0 --server-url <http://host:port> [--endpoint </path>] [--timeout-seconds <n>] <shell-command>"
 	echo "Example:"
 	echo "  $0 --server-url http://192.168.1.10:8000 \"bluetoothctl show && /etc/init.d/S45hidd status\""
+	echo "  $0 --server-url http://192.168.1.10:8000 --timeout-seconds 10 \"/var/lib/controlleros/dev/bin/hidd\""
 }
 
 while [ "$#" -gt 0 ]; do
@@ -30,6 +32,15 @@ while [ "$#" -gt 0 ]; do
 				exit 1
 			}
 			ENDPOINT="$2"
+			shift 2
+			;;
+		--timeout-seconds)
+			[ "$#" -ge 2 ] || {
+				echo "error: --timeout-seconds requires a value" >&2
+				usage >&2
+				exit 1
+			}
+			TIMEOUT_SECONDS="$2"
 			shift 2
 			;;
 		-h|--help)
@@ -73,23 +84,100 @@ case "$ENDPOINT" in
 	*) ENDPOINT="/$ENDPOINT" ;;
 esac
 
+if [ -n "$TIMEOUT_SECONDS" ]; then
+	case "$TIMEOUT_SECONDS" in
+		''|*[!0-9]*)
+			echo "error: --timeout-seconds must be a positive integer" >&2
+			exit 1
+			;;
+	esac
+	if [ "$TIMEOUT_SECONDS" -eq 0 ]; then
+		echo "error: --timeout-seconds must be > 0" >&2
+		exit 1
+	fi
+fi
+
 POST_URL="$SERVER_URL$ENDPOINT"
 HOSTNAME="$(hostname 2>/dev/null || echo deck)"
 TIMESTAMP_UTC="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)"
 TMP_OUT="$(mktemp /tmp/controlleros-dev-run.out.XXXXXX)"
 TMP_PAYLOAD="$(mktemp /tmp/controlleros-dev-run.payload.XXXXXX)"
-trap 'rm -f "$TMP_OUT" "$TMP_PAYLOAD"' EXIT INT TERM
+TMP_TIMEOUT_FLAG="$(mktemp /tmp/controlleros-dev-run.timeout.XXXXXX)"
+trap 'rm -f "$TMP_OUT" "$TMP_PAYLOAD" "$TMP_TIMEOUT_FLAG"' EXIT INT TERM
 
+list_child_pids() {
+	parent_pid="$1"
+	for status_file in /proc/[0-9]*/status; do
+		[ -r "$status_file" ] || continue
+		pid="${status_file#/proc/}"
+		pid="${pid%/status}"
+		ppid="$(sed -n 's/^PPid:[[:space:]]*//p' "$status_file" 2>/dev/null | head -n1)"
+		[ -n "$ppid" ] || continue
+		if [ "$ppid" = "$parent_pid" ]; then
+			echo "$pid"
+		fi
+	done
+}
+
+kill_descendants() {
+	parent_pid="$1"
+	signal_name="$2"
+	for child_pid in $(list_child_pids "$parent_pid"); do
+		kill_descendants "$child_pid" "$signal_name"
+		kill "-$signal_name" "$child_pid" 2>/dev/null || true
+	done
+}
+
+TIMED_OUT=0
 set +e
-sh -c "$COMMAND" >"$TMP_OUT" 2>&1
-CMD_EXIT="$?"
+if [ -n "$TIMEOUT_SECONDS" ]; then
+	if command -v setsid >/dev/null 2>&1; then
+		setsid sh -c "$COMMAND" >"$TMP_OUT" 2>&1 &
+		CMD_PID="$!"
+	elif command -v busybox >/dev/null 2>&1 && busybox setsid true >/dev/null 2>&1; then
+		busybox setsid sh -c "$COMMAND" >"$TMP_OUT" 2>&1 &
+		CMD_PID="$!"
+	else
+		sh -c "$COMMAND" >"$TMP_OUT" 2>&1 &
+		CMD_PID="$!"
+	fi
+	(
+		sleep "$TIMEOUT_SECONDS"
+		if kill -0 "$CMD_PID" 2>/dev/null; then
+			: >"$TMP_TIMEOUT_FLAG"
+			kill_descendants "$CMD_PID" TERM
+			kill -TERM "$CMD_PID" 2>/dev/null || true
+			sleep 1
+			kill_descendants "$CMD_PID" KILL
+			kill -KILL "$CMD_PID" 2>/dev/null || true
+		fi
+	) &
+	WATCHDOG_PID="$!"
+
+	wait "$CMD_PID"
+	CMD_EXIT="$?"
+	kill "$WATCHDOG_PID" 2>/dev/null || true
+	wait "$WATCHDOG_PID" 2>/dev/null || true
+
+	if [ -s "$TMP_TIMEOUT_FLAG" ]; then
+		TIMED_OUT=1
+		CMD_EXIT=124
+	fi
+else
+	sh -c "$COMMAND" >"$TMP_OUT" 2>&1
+	CMD_EXIT="$?"
+fi
 set -e
 
 {
 	printf 'timestamp_utc=%s\n' "$TIMESTAMP_UTC"
 	printf 'deck_host=%s\n' "$HOSTNAME"
+	printf 'command_timed_out=%s\n' "$TIMED_OUT"
 	printf 'command_exit_code=%s\n' "$CMD_EXIT"
 	printf 'command=%s\n' "$COMMAND"
+	if [ -n "$TIMEOUT_SECONDS" ]; then
+		printf 'timeout_seconds=%s\n' "$TIMEOUT_SECONDS"
+	fi
 	printf '\n'
 	cat "$TMP_OUT"
 } >"$TMP_PAYLOAD"
@@ -100,6 +188,7 @@ if command -v curl >/dev/null 2>&1; then
 	curl -fsS -X POST \
 		-H "Content-Type: text/plain" \
 		-H "X-Deck-Host: $HOSTNAME" \
+		-H "X-Command-Timed-Out: $TIMED_OUT" \
 		-H "X-Command-Exit-Code: $CMD_EXIT" \
 		-H "X-Command: $COMMAND" \
 		--data-binary "@$TMP_PAYLOAD" \
@@ -119,4 +208,7 @@ else
 fi
 
 echo "Command exit code: $CMD_EXIT"
+if [ "$TIMED_OUT" -eq 1 ]; then
+	echo "Command timed out after ${TIMEOUT_SECONDS}s"
+fi
 exit "$CMD_EXIT"

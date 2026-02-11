@@ -120,10 +120,13 @@ Upload Deck command logs to host during Loop 2:
 
 ```bash
 controlleros-dev-run --server-url http://<DEV_MACHINE_IP>:8000 "bluetoothctl show && /etc/init.d/S45hidd status"
+controlleros-dev-run --server-url http://<DEV_MACHINE_IP>:8000 --timeout-seconds 10 "/var/lib/controlleros/dev/bin/hidd"
 ```
 
 This sends full command output (`stdout` + `stderr`) to the dev server log
 endpoint (`/logs`) and stores logs under `out/dev-logs/` on the host.
+If `--timeout-seconds` is provided, the command is terminated after that many
+seconds and returns exit code `124`.
 
 ## HID config validation (checkpoint 03)
 

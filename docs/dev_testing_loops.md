@@ -115,12 +115,18 @@ Example:
 controlleros-dev-run \
   --server-url http://<DEV_MACHINE_IP>:8000 \
   "bluetoothctl show && /etc/init.d/S45hidd restart && /var/lib/controlleros/dev/bin/controllerosctl hid self-test --hidd /var/lib/controlleros/dev/bin/hidd --config /var/lib/controlleros/dev/configs/hid/hid.toml"
+
+controlleros-dev-run \
+  --server-url http://<DEV_MACHINE_IP>:8000 \
+  --timeout-seconds 10 \
+  "/var/lib/controlleros/dev/bin/hidd"
 ```
 
 Behavior:
 
 - runs the shell command exactly once
 - preserves the wrapped command exit code
+- optionally enforces a timeout and returns exit code `124`
 - uploads output to host `POST /logs`
 - host stores a timestamped log file under `out/dev-logs/`
 
