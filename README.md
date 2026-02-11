@@ -44,6 +44,16 @@ cp out/buildroot/images/rootfs.iso9660 out/buildroot/images/controlleros.iso
 6) Use Ventoy's GRUB2 mode and select `controlleros.iso`.
 7) Successful boot shows a ControllerOS login prompt.
 
+## Local terminals on Deck
+
+The image provides login gettys on `tty1`, `tty2`, and `tty3`.
+
+- Switch consoles with:
+  - `chvt 1`
+  - `chvt 2`
+  - `chvt 3`
+- On keyboards where VT hotkeys are supported, `Ctrl+Alt+F1/F2/F3` may also work.
+
 ## Bluetooth pairing scripts
 
 - Enable pairing mode:

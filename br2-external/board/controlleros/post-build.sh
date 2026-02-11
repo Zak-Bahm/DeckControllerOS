@@ -38,3 +38,14 @@ chmod 0755 "${TARGET_DIR}/usr/bin/controlleros-dev-update" \
 mkdir -p "${TARGET_DIR}/etc/controlleros"
 cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/hid/hid.toml" \
 	"${TARGET_DIR}/etc/controlleros/hid.toml"
+
+# Ensure additional virtual console gettys for multi-terminal debugging.
+INITTAB="${TARGET_DIR}/etc/inittab"
+if [ -f "${INITTAB}" ]; then
+	if ! grep -q '^tty2::respawn:/sbin/getty -L  tty2 0 vt100 # GENERIC_SERIAL$' "${INITTAB}"; then
+		printf '%s\n' 'tty2::respawn:/sbin/getty -L  tty2 0 vt100 # GENERIC_SERIAL' >> "${INITTAB}"
+	fi
+	if ! grep -q '^tty3::respawn:/sbin/getty -L  tty3 0 vt100 # GENERIC_SERIAL$' "${INITTAB}"; then
+		printf '%s\n' 'tty3::respawn:/sbin/getty -L  tty3 0 vt100 # GENERIC_SERIAL' >> "${INITTAB}"
+	fi
+fi
