@@ -6,12 +6,14 @@ BASE_URL=""
 ENDPOINT="/logs"
 TIMEOUT_SECONDS=""
 COMMAND=""
+SHELL_SCRIPT=""
 
 usage() {
-	echo "Usage: $0 --base-url <http://host:port> [--endpoint </path>] [--timeout-seconds <n>] <shell-command>"
+	echo "Usage: $0 --base-url <http://host:port> [--endpoint </path>] [--timeout-seconds <n>] [--shell-script <name>] [<shell-command>]"
 	echo "Example:"
 	echo "  $0 --base-url http://192.168.1.10:8000 \"controlleros-dev-debug all\""
 	echo "  $0 --base-url http://192.168.1.10:8000 --timeout-seconds 10 \"controlleros-dev-debug hidd-run\""
+	echo "  $0 --base-url http://192.168.1.10:8000 --timeout-seconds 20 --shell-script test_step0_axes.sh"
 }
 
 extract_base_url_host() {
@@ -55,6 +57,15 @@ while [ "$#" -gt 0 ]; do
 			TIMEOUT_SECONDS="$2"
 			shift 2
 			;;
+		--shell-script)
+			[ "$#" -ge 2 ] || {
+				echo "error: --shell-script requires a value" >&2
+				usage >&2
+				exit 1
+			}
+			SHELL_SCRIPT="$2"
+			shift 2
+			;;
 		-h|--help)
 			usage
 			exit 0
@@ -74,12 +85,16 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 
-[ "$#" -ge 1 ] || {
-	echo "error: shell-command is required" >&2
+if [ -n "$SHELL_SCRIPT" ]; then
+	# --shell-script provided; remaining positional args are passed to the script
+	SCRIPT_ARGS="${*:-}"
+elif [ "$#" -ge 1 ]; then
+	COMMAND="$*"
+else
+	echo "error: either <shell-command> or --shell-script is required" >&2
 	usage >&2
 	exit 1
-}
-COMMAND="$*"
+fi
 
 [ -n "$BASE_URL" ] || {
 	echo "error: --base-url is required" >&2
@@ -115,13 +130,31 @@ if command -v controlleros-dev-debug >/dev/null 2>&1; then
 	controlleros-dev-debug net-setup "$BASE_HOST" || true
 fi
 
+# Download and prepare shell script if requested.
+if [ -n "$SHELL_SCRIPT" ]; then
+	TMP_SCRIPT="$(mktemp /tmp/controlleros-dev-run.script.XXXXXX)"
+	SCRIPT_URL="$BASE_URL/$SHELL_SCRIPT"
+	echo "Downloading script: $SCRIPT_URL"
+	if command -v wget >/dev/null 2>&1; then
+		wget -qO "$TMP_SCRIPT" "$SCRIPT_URL"
+	elif command -v curl >/dev/null 2>&1; then
+		curl -fsSo "$TMP_SCRIPT" "$SCRIPT_URL"
+	else
+		echo "error: need wget or curl to download script" >&2
+		exit 1
+	fi
+	chmod +x "$TMP_SCRIPT"
+	COMMAND="sh $TMP_SCRIPT ${SCRIPT_ARGS:-}"
+	# Clean up the downloaded script on exit (append to existing trap later)
+fi
+
 POST_URL="$BASE_URL$ENDPOINT"
 HOSTNAME="$(hostname 2>/dev/null || echo deck)"
 TIMESTAMP_UTC="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)"
 TMP_OUT="$(mktemp /tmp/controlleros-dev-run.out.XXXXXX)"
 TMP_PAYLOAD="$(mktemp /tmp/controlleros-dev-run.payload.XXXXXX)"
 TMP_TIMEOUT_FLAG="$(mktemp /tmp/controlleros-dev-run.timeout.XXXXXX)"
-trap 'rm -f "$TMP_OUT" "$TMP_PAYLOAD" "$TMP_TIMEOUT_FLAG"' EXIT INT TERM
+trap 'rm -f "$TMP_OUT" "$TMP_PAYLOAD" "$TMP_TIMEOUT_FLAG" "${TMP_SCRIPT:-}"' EXIT INT TERM
 
 list_child_pids() {
 	parent_pid="$1"

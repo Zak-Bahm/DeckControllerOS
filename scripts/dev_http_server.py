@@ -38,10 +38,38 @@ class DevRequestHandler(SimpleHTTPRequestHandler):
 
         payload = self.rfile.read(n_bytes)
         now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        host = _sanitize(self.headers.get("X-Deck-Host", "deck"))
-        status = _sanitize(self.headers.get("X-Command-Exit-Code", "unknown"))
-        command = self.headers.get("X-Command", "")
         remote_ip = self.client_address[0] if self.client_address else "unknown"
+
+        # Extract metadata from the payload body (authoritative source).
+        # The payload starts with key=value lines followed by a blank line.
+        body_meta: dict[str, str] = {}
+        try:
+            text = payload.decode("utf-8", errors="replace")
+            for line in text.splitlines():
+                if not line:
+                    break
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    body_meta[k.strip()] = v.strip()
+        except Exception:
+            pass
+
+        # Use body metadata, fall back to HTTP headers, then defaults.
+        host = _sanitize(
+            body_meta.get("deck_host")
+            or self.headers.get("X-Deck-Host")
+            or "deck"
+        )
+        status = _sanitize(
+            body_meta.get("command_exit_code")
+            or self.headers.get("X-Command-Exit-Code")
+            or "unknown"
+        )
+        command = (
+            body_meta.get("command")
+            or self.headers.get("X-Command")
+            or ""
+        )
 
         filename = f"{now}_{host}_exit{status}.log"
         out_path = self.logs_dir / filename
@@ -53,12 +81,8 @@ class DevRequestHandler(SimpleHTTPRequestHandler):
         meta = [
             f"received_utc={now}",
             f"remote_ip={remote_ip}",
-            f"deck_host={host}",
-            f"command_exit_code={status}",
-            f"command={command}",
-            "",
         ]
-        out_path.write_bytes("\n".join(meta).encode("utf-8") + payload)
+        out_path.write_bytes("\n".join(meta).encode("utf-8") + b"\n" + payload)
 
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")

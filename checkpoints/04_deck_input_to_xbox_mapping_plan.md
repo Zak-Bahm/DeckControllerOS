@@ -27,7 +27,7 @@
 ## Plan (incremental)
 
 ### Step 0 — Kernel config: enable Steam Deck input drivers
-- [ ] Not started
+- [x] Done (2026-03-16)
 **Actions:**
 - Add the following to `configs/kernel/steamdeck_defconfig`:
   - `CONFIG_HID=y` — HID core subsystem (likely auto-selected by UHID but should be explicit).
@@ -42,6 +42,31 @@
 - `cat /proc/bus/input/devices` shows a device with ABS and KEY capabilities matching sticks/buttons.
 
 **Risk note:** If `hid-steam` does not claim the Deck's Neptune controller on kernel 6.6.79, check `dmesg` for HID enumeration. The Neptune controller USB VID:PID is `28DE:1205`. If the driver doesn't match, `CONFIG_HID_GENERIC=y` provides a fallback that exposes raw HID events, though axis ranges/codes may differ. Document any deviations.
+
+**Validated (2026-03-16):** `hid-steam` loaded and created 4 input devices for VID `28DE` PID `1205`:
+- `event7` — Keyboard interface (volume/power keys). Ignore.
+- `event8` — Mouse interface (trackpad relative axes). Ignore.
+- **`event9` ("Steam Deck")** — **Gamepad** with `js0`. ABS axes: `ABS_X`, `ABS_Y`, `ABS_RX`, `ABS_RY`, `ABS_HAT0X/Y`, `ABS_HAT1X/Y`, `ABS_HAT2X/Y`. Buttons in EV_KEY bitmask.
+- `event10` — Motion sensors (gyro/accel). Ignore.
+
+**Verified from kernel source (`drivers/hid/hid-steam.c`, `STEAM_QUIRK_DECK` path):**
+
+Axes (gamepad device):
+- `ABS_X` / `ABS_Y`: Left stick, range -32767..32767 (Y inverted by driver)
+- `ABS_RX` / `ABS_RY`: Right stick, range -32767..32767 (Y inverted by driver)
+- `ABS_HAT2Y`: **Left trigger** (analog), range 0..32767
+- `ABS_HAT2X`: **Right trigger** (analog), range 0..32767
+- `ABS_HAT0X` / `ABS_HAT0Y`: Left touchpad (ignore MVP)
+- `ABS_HAT1X` / `ABS_HAT1Y`: Right touchpad (ignore MVP)
+
+Buttons (MVP):
+- `BTN_A`(0x130), `BTN_B`(0x131), `BTN_X`(0x133), `BTN_Y`(0x134)
+- `BTN_TL`(0x136)/LB, `BTN_TR`(0x137)/RB
+- `BTN_SELECT`(0x13a)/Back, `BTN_START`(0x13b)/Start
+- `BTN_THUMBL`(0x13d)/LS click, `BTN_THUMBR`(0x13e)/RS click
+- `BTN_DPAD_UP/DOWN/LEFT/RIGHT`(0x220-0x223) — **D-pad is buttons, NOT hat axes**
+
+Buttons (ignore MVP): `BTN_TL2`/`BTN_TR2` (digital trigger), `BTN_MODE` (Steam logo), `BTN_THUMB`/`BTN_THUMB2` (pad touch), `BTN_TRIGGER_HAPPY1-4` (grips), `BTN_GEAR_DOWN`/`BTN_GEAR_UP` (back levers), `BTN_BASE` (quick access).
 
 ### Step 1 — Create `crates/input/` crate skeleton and workspace integration
 - [ ] Not started
