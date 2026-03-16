@@ -1,0 +1,111 @@
+# Steam Deck → Xbox-style HID mapping config
+# Evdev codes from hid-steam driver (kernel 6.6.79, STEAM_QUIRK_DECK path)
+# Device: "Steam Deck" (VID 0x28DE, PID 0x1205, /dev/input/event9)
+
+[device]
+name = "Steam Deck"
+vendor_id = 0x28DE
+product_id = 0x1205
+
+# --- Axes ---
+# Sticks: range -32767..32767, Y axes pre-inverted by hid-steam driver
+# Triggers: ABS_HAT2Y = left, ABS_HAT2X = right, range 0..32767
+
+[[axes]]
+evdev_code = 0x00  # ABS_X
+hid_axis = "lx"
+evdev_min = -32767
+evdev_max = 32767
+deadzone = 4000
+
+[[axes]]
+evdev_code = 0x01  # ABS_Y
+hid_axis = "ly"
+evdev_min = -32767
+evdev_max = 32767
+deadzone = 4000
+
+[[axes]]
+evdev_code = 0x03  # ABS_RX
+hid_axis = "rx"
+evdev_min = -32767
+evdev_max = 32767
+deadzone = 4000
+
+[[axes]]
+evdev_code = 0x04  # ABS_RY
+hid_axis = "ry"
+evdev_min = -32767
+evdev_max = 32767
+deadzone = 4000
+
+[[axes]]
+evdev_code = 0x15  # ABS_HAT2Y — left trigger
+hid_axis = "lt"
+evdev_min = 0
+evdev_max = 32767
+
+[[axes]]
+evdev_code = 0x14  # ABS_HAT2X — right trigger
+hid_axis = "rt"
+evdev_min = 0
+evdev_max = 32767
+
+# --- Buttons ---
+# D-pad is buttons (BTN_DPAD_*), not hat axes
+
+[[buttons]]
+evdev_code = 0x130  # BTN_SOUTH / BTN_A
+hid_button = "a"
+
+[[buttons]]
+evdev_code = 0x131  # BTN_EAST / BTN_B
+hid_button = "b"
+
+[[buttons]]
+evdev_code = 0x133  # BTN_NORTH / BTN_X
+hid_button = "x"
+
+[[buttons]]
+evdev_code = 0x134  # BTN_WEST / BTN_Y
+hid_button = "y"
+
+[[buttons]]
+evdev_code = 0x136  # BTN_TL
+hid_button = "lb"
+
+[[buttons]]
+evdev_code = 0x137  # BTN_TR
+hid_button = "rb"
+
+[[buttons]]
+evdev_code = 0x13A  # BTN_SELECT
+hid_button = "back"
+
+[[buttons]]
+evdev_code = 0x13B  # BTN_START
+hid_button = "start"
+
+[[buttons]]
+evdev_code = 0x13D  # BTN_THUMBL
+hid_button = "ls"
+
+[[buttons]]
+evdev_code = 0x13E  # BTN_THUMBR
+hid_button = "rs"
+
+[[buttons]]
+evdev_code = 0x220  # BTN_DPAD_UP
+hid_button = "dpad_up"
+
+[[buttons]]
+evdev_code = 0x221  # BTN_DPAD_DOWN
+hid_button = "dpad_down"
+
+[[buttons]]
+evdev_code = 0x222  # BTN_DPAD_LEFT
+hid_button = "dpad_left"
+
+[[buttons]]
+evdev_code = 0x223  # BTN_DPAD_RIGHT
+hid_button = "dpad_right"

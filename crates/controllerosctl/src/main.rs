@@ -8,6 +8,11 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use common::config::{HidConfig, DEFAULT_HID_CONFIG_PATH};
+use common::hid::{
+    XBOX_BUTTON_A, XBOX_BUTTON_B, XBOX_BUTTON_HOME, XBOX_BUTTON_LB, XBOX_BUTTON_LS, XBOX_BUTTON_RB,
+    XBOX_BUTTON_RS, XBOX_BUTTON_SELECT, XBOX_BUTTON_START, XBOX_BUTTON_X, XBOX_BUTTON_Y,
+};
+use input::{discover_devices, InputReader, MappingConfig};
 
 fn main() -> ExitCode {
     match run() {
@@ -23,6 +28,8 @@ fn run() -> Result<()> {
     let args = Args::parse(env::args().skip(1))?;
     match args.cmd {
         CommandKind::HidSelfTest => run_hid_self_test(&args),
+        CommandKind::InputList => run_input_list(),
+        CommandKind::InputMonitor => run_input_monitor(&args),
         CommandKind::Help => {
             print_help();
             Ok(())
@@ -34,13 +41,18 @@ fn run() -> Result<()> {
 struct Args {
     cmd: CommandKind,
     config_path: String,
+    mapping_config_path: String,
     hidd_path: PathBuf,
     pattern_seconds: u64,
 }
 
+const DEFAULT_MAPPING_CONFIG_PATH: &str = "/etc/controlleros/mapping/xbox.toml";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CommandKind {
     HidSelfTest,
+    InputList,
+    InputMonitor,
     Help,
 }
 
@@ -50,6 +62,7 @@ impl Args {
         I: Iterator<Item = String>,
     {
         let mut config_path = DEFAULT_HID_CONFIG_PATH.to_string();
+        let mut mapping_config_path = DEFAULT_MAPPING_CONFIG_PATH.to_string();
         let mut hidd_path = infer_hidd_path();
         let mut pattern_seconds = 2u64;
 
@@ -61,6 +74,16 @@ impl Args {
                 Some(other) => return Err(anyhow!("unknown hid subcommand: {other}")),
                 None => return Err(anyhow!("missing hid subcommand (expected: self-test)")),
             },
+            Some("input") => match args.next().as_deref() {
+                Some("list") => CommandKind::InputList,
+                Some("monitor") => CommandKind::InputMonitor,
+                Some(other) => return Err(anyhow!("unknown input subcommand: {other}")),
+                None => {
+                    return Err(anyhow!(
+                        "missing input subcommand (expected: list, monitor)"
+                    ))
+                }
+            },
             Some(other) => return Err(anyhow!("unknown command: {other}")),
         };
 
@@ -70,6 +93,11 @@ impl Args {
                     config_path = args
                         .next()
                         .ok_or_else(|| anyhow!("missing value for --config"))?;
+                }
+                "--mapping-config" => {
+                    mapping_config_path = args
+                        .next()
+                        .ok_or_else(|| anyhow!("missing value for --mapping-config"))?;
                 }
                 "--hidd" => {
                     hidd_path = PathBuf::from(
@@ -98,6 +126,7 @@ impl Args {
         Ok(Self {
             cmd,
             config_path,
+            mapping_config_path,
             hidd_path,
             pattern_seconds,
         })
@@ -185,11 +214,126 @@ fn run_hidd(args: &Args, hidd_args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+fn run_input_list() -> Result<()> {
+    let devices = discover_devices();
+    if devices.is_empty() {
+        println!("no input devices found");
+        return Ok(());
+    }
+    for dev in &devices {
+        let marker = if dev.is_deck_gamepad { " *" } else { "" };
+        println!(
+            "{}: \"{}\" vid=0x{:04x} pid=0x{:04x} {}{}",
+            dev.path.display(),
+            dev.name,
+            dev.vendor,
+            dev.product,
+            dev.caps_summary,
+            marker,
+        );
+    }
+    println!();
+    println!("* = detected as Steam Deck gamepad");
+    Ok(())
+}
+
+fn run_input_monitor(args: &Args) -> Result<()> {
+    let config = MappingConfig::from_file(&args.mapping_config_path)
+        .map_err(|e| anyhow!("mapping config: {e}"))?;
+    let reader = InputReader::new(config).map_err(|e| anyhow!("{e}"))?;
+
+    println!("monitoring input (Ctrl+C to stop)...");
+
+    // Give the event loop thread a moment to start.
+    thread::sleep(Duration::from_millis(50));
+
+    // Print initial state so we know the pipeline works.
+    let mut prev = reader.current_report();
+    println!("initial state:");
+    print_report(&prev);
+    println!();
+
+    loop {
+        let report = reader.current_report();
+
+        // Only print when something changed.
+        if report_differs(&prev, &report) {
+            print_report(&report);
+            prev = report;
+        }
+
+        thread::sleep(Duration::from_millis(16)); // ~60 Hz poll
+    }
+}
+
+fn report_differs(a: &common::hid::InputReport, b: &common::hid::InputReport) -> bool {
+    a.buttons != b.buttons
+        || a.hat != b.hat
+        || a.lx != b.lx
+        || a.ly != b.ly
+        || a.rx != b.rx
+        || a.ry != b.ry
+        || a.lt != b.lt
+        || a.rt != b.rt
+}
+
+fn print_report(r: &common::hid::InputReport) {
+    let buttons = format_buttons(r.buttons);
+    let hat = format_hat(r.hat);
+    println!(
+        "LX:{:+6} LY:{:+6} RX:{:+6} RY:{:+6} LT:{:4} RT:{:4} hat:{} {}",
+        r.lx, r.ly, r.rx, r.ry, r.lt, r.rt, hat, buttons,
+    );
+}
+
+fn format_buttons(bits: u16) -> String {
+    let names: &[(u16, &str)] = &[
+        (XBOX_BUTTON_A, "A"),
+        (XBOX_BUTTON_B, "B"),
+        (XBOX_BUTTON_X, "X"),
+        (XBOX_BUTTON_Y, "Y"),
+        (XBOX_BUTTON_LB, "LB"),
+        (XBOX_BUTTON_RB, "RB"),
+        (XBOX_BUTTON_SELECT, "Back"),
+        (XBOX_BUTTON_START, "Start"),
+        (XBOX_BUTTON_LS, "LS"),
+        (XBOX_BUTTON_RS, "RS"),
+        (XBOX_BUTTON_HOME, "Home"),
+    ];
+    let pressed: Vec<&str> = names
+        .iter()
+        .filter(|(mask, _)| bits & mask != 0)
+        .map(|(_, name)| *name)
+        .collect();
+    if pressed.is_empty() {
+        String::new()
+    } else {
+        format!("[{}]", pressed.join(" "))
+    }
+}
+
+fn format_hat(hat: u8) -> &'static str {
+    match hat {
+        1 => "N ",
+        2 => "NE",
+        3 => "E ",
+        4 => "SE",
+        5 => "S ",
+        6 => "SW",
+        7 => "W ",
+        8 => "NW",
+        _ => "- ",
+    }
+}
+
 fn print_help() {
     println!("Usage:");
     println!("  controllerosctl hid self-test [--config <path>] [--hidd <path>] [--pattern-seconds <1..30>]");
+    println!("  controllerosctl input list");
+    println!("  controllerosctl input monitor [--mapping-config <path>]");
     println!("Defaults:");
     println!("  --config {}", DEFAULT_HID_CONFIG_PATH);
+    println!("  --mapping-config {}", DEFAULT_MAPPING_CONFIG_PATH);
     println!("  --hidd sibling ./hidd (or PATH lookup)");
     println!("  --pattern-seconds 2");
 }
@@ -221,5 +365,35 @@ mod tests {
         .expect_err("pattern-seconds=0 should fail");
 
         assert!(err.to_string().contains("1..=30"));
+    }
+
+    #[test]
+    fn parses_input_list() {
+        let args = Args::parse(vec!["input".into(), "list".into()].into_iter())
+            .expect("parse should succeed");
+        assert_eq!(args.cmd, CommandKind::InputList);
+    }
+
+    #[test]
+    fn parses_input_monitor() {
+        let args = Args::parse(vec!["input".into(), "monitor".into()].into_iter())
+            .expect("parse should succeed");
+        assert_eq!(args.cmd, CommandKind::InputMonitor);
+    }
+
+    #[test]
+    fn parses_input_monitor_with_mapping_config() {
+        let args = Args::parse(
+            vec![
+                "input".into(),
+                "monitor".into(),
+                "--mapping-config".into(),
+                "/tmp/test.toml".into(),
+            ]
+            .into_iter(),
+        )
+        .expect("parse should succeed");
+        assert_eq!(args.cmd, CommandKind::InputMonitor);
+        assert_eq!(args.mapping_config_path, "/tmp/test.toml");
     }
 }

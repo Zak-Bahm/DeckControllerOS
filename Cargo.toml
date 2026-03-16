@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/common",
+  "crates/input",
   "crates/hidd",
   "crates/controllerosctl",
 ]

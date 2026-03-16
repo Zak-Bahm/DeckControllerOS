@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 anyhow = "=1.0.100"
 common = { path = "../common" }
+input = { path = "../input" }

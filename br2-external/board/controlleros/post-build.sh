@@ -45,6 +45,10 @@ mkdir -p "${TARGET_DIR}/etc/controlleros"
 cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/hid/hid.toml" \
 	"${TARGET_DIR}/etc/controlleros/hid.toml"
 
+mkdir -p "${TARGET_DIR}/etc/controlleros/mapping"
+cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/mapping/xbox.toml" \
+	"${TARGET_DIR}/etc/controlleros/mapping/xbox.toml"
+
 # Ensure additional virtual console gettys for multi-terminal debugging.
 INITTAB="${TARGET_DIR}/etc/inittab"
 if [ -f "${INITTAB}" ]; then

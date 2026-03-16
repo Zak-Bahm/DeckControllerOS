@@ -1088,15 +1088,10 @@ fn register_advertisement_iface(cr: &mut Crossroads) -> IfaceToken<Advertisement
 
 fn register_agent_iface(cr: &mut Crossroads) -> IfaceToken<()> {
     cr.register(BLUEZ_AGENT_IFACE, |b| {
-        b.method(
-            "Release",
-            (),
-            (),
-            |_, _, ()| {
-                eprintln!("hidd: BlueZ released pairing agent");
-                Ok(())
-            },
-        );
+        b.method("Release", (), (), |_, _, ()| {
+            eprintln!("hidd: BlueZ released pairing agent");
+            Ok(())
+        });
         b.method(
             "RequestPinCode",
             ("device",),
@@ -1125,9 +1120,7 @@ fn register_agent_iface(cr: &mut Crossroads) -> IfaceToken<()> {
             "DisplayPasskey",
             ("device", "passkey", "entered"),
             (),
-            |_, _, (_device, _passkey, _entered): (Path, u32, u16)| {
-                Ok(())
-            },
+            |_, _, (_device, _passkey, _entered): (Path, u32, u16)| Ok(()),
         );
         b.method(
             "RequestConfirmation",
@@ -1155,22 +1148,14 @@ fn register_agent_iface(cr: &mut Crossroads) -> IfaceToken<()> {
                 Ok(())
             },
         );
-        b.method(
-            "Cancel",
-            (),
-            (),
-            |_, _, ()| {
-                eprintln!("hidd: agent pairing cancelled");
-                Ok(())
-            },
-        );
+        b.method("Cancel", (), (), |_, _, ()| {
+            eprintln!("hidd: agent pairing cancelled");
+            Ok(())
+        });
     })
 }
 
-fn register_agent(
-    conn: &SyncConnection,
-    agent_path: &Path<'static>,
-) -> Result<()> {
+fn register_agent(conn: &SyncConnection, agent_path: &Path<'static>) -> Result<()> {
     let _ = unregister_agent(conn, agent_path);
 
     let bluez_path = dbus_path("/org/bluez")?;

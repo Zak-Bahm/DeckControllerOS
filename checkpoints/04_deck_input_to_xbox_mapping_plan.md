@@ -69,7 +69,7 @@ Buttons (MVP):
 Buttons (ignore MVP): `BTN_TL2`/`BTN_TR2` (digital trigger), `BTN_MODE` (Steam logo), `BTN_THUMB`/`BTN_THUMB2` (pad touch), `BTN_TRIGGER_HAPPY1-4` (grips), `BTN_GEAR_DOWN`/`BTN_GEAR_UP` (back levers), `BTN_BASE` (quick access).
 
 ### Step 1 — Create `crates/input/` crate skeleton and workspace integration
-- [ ] Not started
+- [x] Done (2026-03-16)
 **Actions:**
 - Create `crates/input/` as a library crate.
 - Add to workspace `Cargo.toml`.
@@ -81,7 +81,7 @@ Buttons (ignore MVP): `BTN_TL2`/`BTN_TR2` (digital trigger), `BTN_MODE` (Steam l
 - Verified through Loop 1 only.
 
 ### Step 2 — Implement evdev device discovery
-- [ ] Not started
+- [x] Done (2026-03-16)
 **Actions:**
 - Implement device enumeration: scan `/dev/input/event*`, read device name/phys/capabilities via evdev ioctls.
 - Identify Steam Deck input devices by name/vendor/capabilities (not hardcoded event numbers).
@@ -97,7 +97,7 @@ Buttons (ignore MVP): `BTN_TL2`/`BTN_TR2` (digital trigger), `BTN_MODE` (Steam l
 - Actual evdev codes documented for use in Step 3 mapping config.
 
 ### Step 3 — Define mapping config and types
-- [ ] Not started
+- [x] Done (2026-03-16)
 **Actions:**
 - Create `configs/mapping/xbox.toml` with:
   - Evdev-to-Xbox axis mappings (evdev code → HID axis, with invert/scale flags).
@@ -116,7 +116,7 @@ Buttons (ignore MVP): `BTN_TL2`/`BTN_TR2` (digital trigger), `BTN_MODE` (Steam l
 - Verified through Loop 1 only.
 
 ### Step 4 — Implement input event reading and state tracking
-- [ ] Not started
+- [x] Done (2026-03-16)
 **Actions:**
 - Implement `InputReader` that:
   - Opens discovered evdev devices (grab exclusively if needed to avoid conflicts).
@@ -133,7 +133,7 @@ Buttons (ignore MVP): `BTN_TL2`/`BTN_TR2` (digital trigger), `BTN_MODE` (Steam l
 - Unit tests verify deadzone math, axis normalization, and button mapping logic.
 
 ### Step 5 — Implement `controllerosctl input list` and `controllerosctl input monitor`
-- [ ] Not started
+- [x] Done (2026-03-16)
 **Actions:**
 - Add `input list` subcommand to `controllerosctl`:
   - Calls `discover_devices()` from `crates/input/`.
