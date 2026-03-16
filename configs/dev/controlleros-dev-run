@@ -2,27 +2,39 @@
 
 set -eu
 
-SERVER_URL=""
+BASE_URL=""
 ENDPOINT="/logs"
 TIMEOUT_SECONDS=""
 COMMAND=""
 
 usage() {
-	echo "Usage: $0 --server-url <http://host:port> [--endpoint </path>] [--timeout-seconds <n>] <shell-command>"
+	echo "Usage: $0 --base-url <http://host:port> [--endpoint </path>] [--timeout-seconds <n>] <shell-command>"
 	echo "Example:"
-	echo "  $0 --server-url http://192.168.1.10:8000 \"bluetoothctl show && /etc/init.d/S45hidd status\""
-	echo "  $0 --server-url http://192.168.1.10:8000 --timeout-seconds 10 \"/var/lib/controlleros/dev/bin/hidd\""
+	echo "  $0 --base-url http://192.168.1.10:8000 \"controlleros-dev-debug all\""
+	echo "  $0 --base-url http://192.168.1.10:8000 --timeout-seconds 10 \"controlleros-dev-debug hidd-run\""
+}
+
+extract_base_url_host() {
+	echo "$1" | awk '
+		{
+			s = $0
+			sub(/^[a-zA-Z]+:\/\//, "", s)
+			sub(/\/.*/, "", s)
+			sub(/:[0-9]+$/, "", s)
+			print s
+		}
+	'
 }
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
-		--server-url)
+		--base-url)
 			[ "$#" -ge 2 ] || {
-				echo "error: --server-url requires a value" >&2
+				echo "error: $1 requires a value" >&2
 				usage >&2
 				exit 1
 			}
-			SERVER_URL="$2"
+			BASE_URL="$2"
 			shift 2
 			;;
 		--endpoint)
@@ -69,14 +81,14 @@ done
 }
 COMMAND="$*"
 
-[ -n "$SERVER_URL" ] || {
-	echo "error: --server-url is required" >&2
+[ -n "$BASE_URL" ] || {
+	echo "error: --base-url is required" >&2
 	usage >&2
 	exit 1
 }
 
-case "$SERVER_URL" in
-	*/ ) SERVER_URL="${SERVER_URL%/}" ;;
+case "$BASE_URL" in
+	*/ ) BASE_URL="${BASE_URL%/}" ;;
 esac
 
 case "$ENDPOINT" in
@@ -97,7 +109,13 @@ if [ -n "$TIMEOUT_SECONDS" ]; then
 	fi
 fi
 
-POST_URL="$SERVER_URL$ENDPOINT"
+# Bootstrap networking if needed.
+BASE_HOST="$(extract_base_url_host "$BASE_URL")"
+if command -v controlleros-dev-debug >/dev/null 2>&1; then
+	controlleros-dev-debug net-setup "$BASE_HOST" || true
+fi
+
+POST_URL="$BASE_URL$ENDPOINT"
 HOSTNAME="$(hostname 2>/dev/null || echo deck)"
 TIMESTAMP_UTC="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)"
 TMP_OUT="$(mktemp /tmp/controlleros-dev-run.out.XXXXXX)"
@@ -159,10 +177,10 @@ if [ -n "$TIMEOUT_SECONDS" ]; then
 	kill "$WATCHDOG_PID" 2>/dev/null || true
 	wait "$WATCHDOG_PID" 2>/dev/null || true
 
-	if [ -s "$TMP_TIMEOUT_FLAG" ]; then
-		TIMED_OUT=1
-		CMD_EXIT=124
-	fi
+		if [ -e "$TMP_TIMEOUT_FLAG" ]; then
+			TIMED_OUT=1
+			CMD_EXIT=124
+		fi
 else
 	sh -c "$COMMAND" >"$TMP_OUT" 2>&1
 	CMD_EXIT="$?"

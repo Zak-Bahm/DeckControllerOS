@@ -31,14 +31,17 @@ A Git repository that can be built to produce a bootable image (ISO or bootable 
 ---
 
 ## High-level architecture
-ControllerOS runs three core services:
+ControllerOS runs two core services:
 
 1. **Bluetooth service** (BlueZ `bluetoothd`)
-2. **HID gamepad service** (Rust daemon using `/dev/uhid` to register HID device + send reports)
-3. **Input reader** (Rust module reading Steam Deck input events from `/dev/input/event*` and mapping to HID reports)
+2. **HID gamepad daemon** (`hidd` — Rust daemon that registers a BLE GATT HID-over-GATT Profile application with BlueZ, reads Steam Deck evdev inputs, and publishes HID reports to the connected host)
+
+`hidd` contains an integrated input reader module (`crates/input/`) for evdev discovery and mapping.
 
 Data flow:
-`evdev input events → Rust mapping layer → HID report bytes → /dev/uhid → BlueZ → Bluetooth HID (HOGP) → Host OS sees a gamepad`
+`evdev input events → Rust mapping layer → HID report bytes → BlueZ GATT HOG (D-Bus) → BLE → Host OS sees a gamepad`
+
+Note: UHID (`/dev/uhid`) is used only for `hidd --self-test` diagnostics (validating kernel HID subsystem access). It is not part of the BLE data path — BlueZ does not bridge UHID devices to Bluetooth.
 
 ---
 
@@ -82,7 +85,8 @@ The repo should be structured so an AI tool can begin work immediately:
 - Build system: **Buildroot** (preferred for minimal, reproducible images).
 - Init system: BusyBox init or systemd; choose whichever minimizes friction with BlueZ.
 - Bluetooth stack: **BlueZ**.
-- HID device creation: Linux **UHID** via `/dev/uhid` from Rust.
+- BLE HID exposure: **GATT HID-over-GATT Profile (HOGP)** registered with BlueZ via D-Bus (`RegisterApplication` + `RegisterAdvertisement`).
+- HID self-test: Linux **UHID** via `/dev/uhid` (diagnostic only, not in BLE data path).
 - Input reading: Linux **evdev** (read `/dev/input/event*`).
 
 ---
@@ -90,7 +94,7 @@ The repo should be structured so an AI tool can begin work immediately:
 ## Kernel capabilities required (MVP)
 Kernel config must include at minimum:
 - Bluetooth support (BT + HCI USB if needed)
-- UHID support
+- UHID support (for `hidd --self-test` diagnostics)
 - evdev input
 
 ---

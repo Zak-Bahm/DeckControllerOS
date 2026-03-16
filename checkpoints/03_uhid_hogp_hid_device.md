@@ -30,13 +30,15 @@ Expose a **single** Bluetooth HID gamepad device to the paired host using BlueZ 
 ---
 
 ## Implementation Requirements
-1. Kernel provides `/dev/uhid`.
-2. `hidd` registers a HID gamepad device via UHID and emits reports at a stable rate.
+1. Kernel provides `/dev/uhid` (used for `--self-test` diagnostics).
+2. `hidd` registers a BLE GATT HID-over-GATT Profile (HOGP) application with BlueZ and emits reports at a stable rate to the connected host via BLE.
 3. Host enumerates the device as a controller.
 4. `controllerosctl hid self-test`:
    - prints descriptor/report size
    - sends a short test pattern (A button toggle or axis sweep)
    - exits 0 on success, non-zero on failure.
+
+**Note:** The BLE HID data path uses a custom GATT application (`crates/hidd/src/hog.rs`) registered with BlueZ via D-Bus, not UHID. UHID creates a local kernel HID device and does not bridge to Bluetooth.
 
 ---
 

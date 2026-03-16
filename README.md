@@ -56,41 +56,54 @@ The image provides login gettys on `tty1`, `tty2`, and `tty3`.
   - `chvt 3`
 - On keyboards where VT hotkeys are supported, `Ctrl+Alt+F1/F2/F3` may also work.
 
-## Bluetooth pairing scripts
+## On-Deck debugging (controlleros-dev-debug)
 
-- Enable pairing mode:
-```bash
-./scripts/bt_pairing_mode.sh
-```
-- Expected result in `bluetoothctl show` output:
-  - `Pairable: yes`
-  - `Discoverable: yes`
+The `controlleros-dev-debug` tool is included in the ISO for development.
+It consolidates Bluetooth and hidd diagnostics into a single command.
 
-- Show adapter status and paired devices:
 ```bash
-./scripts/bt_show_status.sh
+# Quick health check (adapter state + hidd status + recent logs)
+controlleros-dev-debug all
+
+# Enable pairing mode (discoverable + pairable + NoInputNoOutput agent)
+controlleros-dev-debug bt-pairing
+
+# Show adapter state and paired/connected devices
+controlleros-dev-debug bt-status
+
+# Show hidd process status and recent log output
+controlleros-dev-debug hidd-status
+
+# View last N lines of hidd log (default 30)
+controlleros-dev-debug hidd-log 50
+
+# Run hidd in foreground to see live output (stops the service first)
+controlleros-dev-debug hidd-run
+
+# Restart the hidd service
+controlleros-dev-debug hidd-restart
+
+# Run the HID self-test
+controlleros-dev-debug self-test
+
+# Scan for nearby BLE devices (10s)
+controlleros-dev-debug bt-scan
+
+# Show detailed info / remove a paired device
+controlleros-dev-debug bt-info <MAC>
+controlleros-dev-debug bt-remove <MAC or name>
 ```
+
+## Host-side validation (checkpoint 03+)
+
+Run from this repo on a Linux host:
+```bash
+./scripts/bt_checkpoint03_host_validate.sh
+```
+- Default target name: `ControllerOS Xbox Controller` (from `configs/bluez/main.conf`).
+- Logs written to `out/host-logs/`.
 - Expected result:
-  - Adapter section with `Powered`, `Pairable`, and `Discoverable`
-  - `paired-devices` listing known host device entries
-
-- Capture debug logs during pairing attempt:
-```bash
-./scripts/bt_debug_pairing_capture.sh
-```
-- Behavior:
-  - Stops current `bluetoothd` service
-  - Starts `bluetoothd` in debug mode
-  - Enables `Powered`, `Pairable`, and `Discoverable`
-  - Writes logs to `scripts/bt_debug_YYYYMMDD_HHMMSS.log`
-  - Restarts init-managed `bluetoothd` when you stop with `Ctrl+C`
-
-- Run checkpoint 02 self-check:
-```bash
-./scripts/bt_checkpoint02_selfcheck.sh --require-paired
-```
-- Expected result:
-  - `Checkpoint 02 self-check: PASS`
+  - `PASS: Host discovered, paired, trusted, connected, and observed changing input pattern`
 
 ## Development loops (fast iteration)
 
@@ -115,12 +128,13 @@ Deck-side scripts included in the ISO image:
 - `controlleros-dev-update`
 - `controlleros-dev-list`
 - `controlleros-dev-run`
+- `controlleros-dev-debug`
 
 Upload Deck command logs to host during Loop 2:
 
 ```bash
-controlleros-dev-run --server-url http://<DEV_MACHINE_IP>:8000 "bluetoothctl show && /etc/init.d/S45hidd status"
-controlleros-dev-run --server-url http://<DEV_MACHINE_IP>:8000 --timeout-seconds 10 "/var/lib/controlleros/dev/bin/hidd"
+controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 "bluetoothctl show && /etc/init.d/S45hidd status"
+controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --timeout-seconds 10 "/var/lib/controlleros/dev/bin/hidd"
 ```
 
 This sends full command output (`stdout` + `stderr`) to the dev server log
@@ -144,7 +158,7 @@ Failure behavior:
 - Invalid config prints a clear `hidd: invalid HID config: ...` error
 - Exits non-zero
 
-## HID self-test command (checkpoint 03 step 5)
+## HID self-test command (checkpoint 03 step 7)
 
 Run from host workspace (uses local binaries):
 
@@ -165,10 +179,15 @@ Run on Deck after Dev Loop 2 update:
 ```
 
 Expected success output includes:
+- `profile_mode=<mode>`
+- `profile_identity=vid=0x.... pid=0x.... version=0x.... country=<n>`
 - `descriptor_len=<n>`
 - `report_len=<n>`
 - `UHID OK`
 - `pattern_run=OK duration=<s>s`
+
+Profile details:
+- `docs/hid_profile.md`
 
 ## Buildroot image integration (checkpoint 03 step 6)
 

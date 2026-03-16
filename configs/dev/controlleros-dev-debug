@@ -1,0 +1,322 @@
+#!/bin/sh
+#
+# controlleros-dev-debug — on-Deck diagnostic tool for development.
+# Installed alongside the other controlleros-dev-* scripts.
+# Not needed for production builds.
+#
+# Usage:
+#   controlleros-dev-debug <command>
+#
+# Commands:
+#   bt-status      Show adapter state and paired devices
+#   bt-pairing     Enable pairing mode (discoverable + pairable + agent)
+#   bt-scan        Scan for nearby BLE devices (10s)
+#   bt-info <MAC>  Show detailed info for a device
+#   bt-remove <MAC|name> Remove a paired device (by MAC or name)
+#   hidd-status    Show hidd process status and recent logs
+#   hidd-restart   Restart the hidd service
+#   hidd-log [N]   Show last N lines of hidd log (default 30)
+#   hidd-run       Run hidd in foreground (stop service first)
+#   self-test      Run controllerosctl hid self-test
+#   net-setup <host> Bootstrap networking to reach a host IP
+#   all            Run bt-status + hidd-status (quick health check)
+
+set -eu
+
+HIDD_INIT="/etc/init.d/S45hidd"
+HIDD_LOG="/var/log/hidd.log"
+HIDD_BIN="/usr/bin/hidd"
+HIDD_CONFIG="/etc/controlleros/hid.toml"
+CTL_BIN="/usr/bin/controllerosctl"
+
+# Use dev-loop binaries if available, fall back to system.
+if [ -x "/var/lib/controlleros/dev/bin/hidd" ]; then
+	HIDD_BIN="/var/lib/controlleros/dev/bin/hidd"
+fi
+if [ -x "/var/lib/controlleros/dev/bin/controllerosctl" ]; then
+	CTL_BIN="/var/lib/controlleros/dev/bin/controllerosctl"
+fi
+if [ -f "/var/lib/controlleros/dev/configs/hid/hid.toml" ]; then
+	HIDD_CONFIG="/var/lib/controlleros/dev/configs/hid/hid.toml"
+fi
+
+usage() {
+	echo "Usage: $0 <command>"
+	echo ""
+	echo "Commands:"
+	echo "  bt-status        Show adapter state and paired devices"
+	echo "  bt-pairing       Enable pairing mode"
+	echo "  bt-scan          Scan for nearby BLE devices (10s)"
+	echo "  bt-info <MAC>    Show detailed info for a device"
+	echo "  bt-remove <MAC|name>  Remove a paired device (by MAC or name)"
+	echo "  hidd-status      Show hidd process status and recent logs"
+	echo "  hidd-restart     Restart the hidd service"
+	echo "  hidd-log [N]     Show last N lines of hidd log (default 30)"
+	echo "  hidd-run         Run hidd in foreground (stops service first)"
+	echo "  self-test        Run controllerosctl hid self-test"
+	echo "  net-setup <host> Bootstrap networking to reach a host IP"
+	echo "  all              Quick health check (bt-status + hidd-status)"
+}
+
+cmd_bt_status() {
+	echo "=== Bluetooth adapter ==="
+	if ! command -v bluetoothctl >/dev/null 2>&1; then
+		echo "ERROR: bluetoothctl not found" >&2
+		return 1
+	fi
+	if ! bluetoothctl show 2>/dev/null; then
+		echo "ERROR: no Bluetooth controller available" >&2
+		return 1
+	fi
+	echo ""
+	echo "=== Paired devices ==="
+	bluetoothctl devices Paired 2>/dev/null || echo "(none)"
+	echo ""
+	echo "=== Connected devices ==="
+	bluetoothctl devices Connected 2>/dev/null || echo "(none)"
+}
+
+cmd_bt_pairing() {
+	if ! command -v bluetoothctl >/dev/null 2>&1; then
+		echo "ERROR: bluetoothctl not found" >&2
+		return 1
+	fi
+	if ! bluetoothctl show >/dev/null 2>&1; then
+		echo "ERROR: no Bluetooth controller available" >&2
+		return 1
+	fi
+
+	bluetoothctl power on >/dev/null
+	bluetoothctl agent NoInputNoOutput >/dev/null
+	bluetoothctl default-agent >/dev/null
+	bluetoothctl pairable on >/dev/null
+	bluetoothctl discoverable on >/dev/null
+
+	SHOW_OUTPUT="$(bluetoothctl show)"
+	PAIRABLE="$(printf '%s\n' "$SHOW_OUTPUT" | sed -n 's/^[[:space:]]*Pairable:[[:space:]]*//p' | head -n1)"
+	DISCOVERABLE="$(printf '%s\n' "$SHOW_OUTPUT" | sed -n 's/^[[:space:]]*Discoverable:[[:space:]]*//p' | head -n1)"
+
+	if [ "$PAIRABLE" != "yes" ] || [ "$DISCOVERABLE" != "yes" ]; then
+		echo "ERROR: failed to enable pairing mode (Pairable=$PAIRABLE Discoverable=$DISCOVERABLE)" >&2
+		return 1
+	fi
+
+	echo "Pairing mode enabled"
+	echo "  Pairable: $PAIRABLE"
+	echo "  Discoverable: $DISCOVERABLE"
+	echo "  Agent: NoInputNoOutput (default-agent)"
+}
+
+cmd_bt_scan() {
+	echo "Scanning for BLE devices (10s)..."
+	bluetoothctl --timeout 10 scan on 2>/dev/null || true
+	echo ""
+	echo "=== Discovered devices ==="
+	bluetoothctl devices 2>/dev/null || echo "(none)"
+}
+
+cmd_bt_info() {
+	MAC="$1"
+	bluetoothctl info "$MAC" 2>/dev/null || echo "ERROR: could not get info for $MAC"
+}
+
+resolve_device_mac() {
+	INPUT="$1"
+	case "$INPUT" in
+		[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f])
+			echo "$INPUT"
+			return 0
+			;;
+	esac
+	# Search paired and known devices by name.
+	MAC="$(bluetoothctl devices 2>/dev/null | while IFS= read -r line; do
+		dev_mac="$(echo "$line" | awk '{print $2}')"
+		dev_name="$(echo "$line" | cut -d' ' -f3-)"
+		if [ "$dev_name" = "$INPUT" ]; then
+			echo "$dev_mac"
+			break
+		fi
+	done)"
+	if [ -n "$MAC" ]; then
+		echo "$MAC"
+		return 0
+	fi
+	echo "ERROR: no device found matching '$INPUT'" >&2
+	return 1
+}
+
+cmd_bt_remove() {
+	MAC="$(resolve_device_mac "$1")" || exit 1
+	echo "Removing $MAC..."
+	bluetoothctl remove "$MAC" 2>/dev/null || echo "ERROR: could not remove $MAC"
+}
+
+cmd_hidd_status() {
+	echo "=== hidd service ==="
+	if [ -x "$HIDD_INIT" ]; then
+		"$HIDD_INIT" status || true
+	else
+		# No init script; check process directly.
+		if pidof hidd >/dev/null 2>&1; then
+			echo "hidd is running (pid=$(pidof hidd))"
+		else
+			echo "hidd is not running"
+		fi
+	fi
+	echo ""
+	echo "=== hidd log (last 10 lines) ==="
+	if [ -f "$HIDD_LOG" ]; then
+		tail -n10 "$HIDD_LOG"
+	else
+		echo "(no log file at $HIDD_LOG)"
+	fi
+	echo ""
+	echo "Binary: $HIDD_BIN"
+	echo "Config: $HIDD_CONFIG"
+}
+
+cmd_hidd_restart() {
+	if [ -x "$HIDD_INIT" ]; then
+		"$HIDD_INIT" restart
+	else
+		echo "No init script at $HIDD_INIT; killing and restarting manually..."
+		killall hidd 2>/dev/null || true
+		sleep 1
+		"$HIDD_BIN" --config "$HIDD_CONFIG" >>"$HIDD_LOG" 2>&1 &
+		echo "hidd started (pid=$!), logging to $HIDD_LOG"
+	fi
+}
+
+cmd_hidd_log() {
+	LINES="${1:-30}"
+	if [ -f "$HIDD_LOG" ]; then
+		tail -n"$LINES" "$HIDD_LOG"
+	else
+		echo "(no log file at $HIDD_LOG)"
+	fi
+}
+
+cmd_hidd_run() {
+	echo "Stopping hidd service (if running)..."
+	if [ -x "$HIDD_INIT" ]; then
+		"$HIDD_INIT" stop 2>/dev/null || true
+	else
+		killall hidd 2>/dev/null || true
+	fi
+	sleep 1
+	echo "Starting hidd in foreground (Ctrl+C to stop)..."
+	echo "  binary: $HIDD_BIN"
+	echo "  config: $HIDD_CONFIG"
+	echo "---"
+	exec "$HIDD_BIN" --config "$HIDD_CONFIG"
+}
+
+cmd_self_test() {
+	"$CTL_BIN" hid self-test --hidd "$HIDD_BIN" --config "$HIDD_CONFIG"
+}
+
+is_ipv4_addr() {
+	echo "$1" | awk -F. '
+		NF != 4 { exit 1 }
+		{
+			for (i = 1; i <= 4; i++) {
+				if ($i !~ /^[0-9]+$/ || $i < 0 || $i > 255) exit 1
+			}
+		}
+		END { exit 0 }
+	'
+}
+
+has_route_to_host() {
+	command -v ip >/dev/null 2>&1 || return 1
+	ip route get "$1" >/dev/null 2>&1
+}
+
+cmd_net_setup() {
+	HOST="$1"
+
+	if ! is_ipv4_addr "$HOST"; then
+		echo "ERROR: '$HOST' is not a valid IPv4 address" >&2
+		return 1
+	fi
+
+	if has_route_to_host "$HOST"; then
+		echo "Route to $HOST already exists"
+		return 0
+	fi
+
+	command -v ip >/dev/null 2>&1 || {
+		echo "ERROR: ip command not found" >&2
+		return 1
+	}
+
+	echo "No route to $HOST; attempting minimal network bootstrap..."
+
+	for IFACE in $(ls /sys/class/net 2>/dev/null); do
+		case "$IFACE" in
+			lo|sit0) continue ;;
+		esac
+
+		ip link set "$IFACE" up >/dev/null 2>&1 || true
+
+		if command -v udhcpc >/dev/null 2>&1; then
+			udhcpc -n -q -t 3 -T 2 -i "$IFACE" >/dev/null 2>&1 || true
+		elif command -v busybox >/dev/null 2>&1; then
+			busybox udhcpc -n -q -t 3 -T 2 -i "$IFACE" >/dev/null 2>&1 || true
+		fi
+
+		if has_route_to_host "$HOST"; then
+			echo "Network bootstrap succeeded on interface: $IFACE"
+			return 0
+		fi
+	done
+
+	echo "ERROR: network bootstrap could not establish a route to $HOST" >&2
+	return 1
+}
+
+cmd_all() {
+	cmd_bt_status
+	echo ""
+	echo "========================================"
+	echo ""
+	cmd_hidd_status
+}
+
+if [ "$#" -lt 1 ]; then
+	usage
+	exit 1
+fi
+
+COMMAND="$1"
+shift
+
+case "$COMMAND" in
+	bt-status)    cmd_bt_status ;;
+	bt-pairing)   cmd_bt_pairing ;;
+	bt-scan)      cmd_bt_scan ;;
+	bt-info)
+		[ "$#" -ge 1 ] || { echo "error: bt-info requires a MAC address" >&2; exit 1; }
+		cmd_bt_info "$1"
+		;;
+	bt-remove)
+		[ "$#" -ge 1 ] || { echo "error: bt-remove requires a MAC address or device name" >&2; exit 1; }
+		cmd_bt_remove "$1"
+		;;
+	hidd-status)  cmd_hidd_status ;;
+	hidd-restart) cmd_hidd_restart ;;
+	hidd-log)     cmd_hidd_log "${1:-30}" ;;
+	hidd-run)     cmd_hidd_run ;;
+	self-test)    cmd_self_test ;;
+	net-setup)
+		[ "$#" -ge 1 ] || { echo "error: net-setup requires a host IP" >&2; exit 1; }
+		cmd_net_setup "$1"
+		;;
+	all)          cmd_all ;;
+	-h|--help|help) usage ;;
+	*)
+		echo "error: unknown command: $COMMAND" >&2
+		usage >&2
+		exit 1
+		;;
+esac

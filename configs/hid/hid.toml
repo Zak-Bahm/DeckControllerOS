@@ -1,7 +1,12 @@
 [device]
-name = "ControllerOS Gamepad"
-vendor_id = 0x28de
-product_id = 0x1205
+name = "ControllerOS Xbox Controller"
+
+[profile]
+mode = "xbox_one_s_1708"
+vendor_id = 0x045e
+product_id = 0x02fd
+version = 0x0408
+country = 0
 
 [report]
 rate_hz = 125

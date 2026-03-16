@@ -13,6 +13,8 @@ if ! bluetoothctl show >/dev/null 2>&1; then
 fi
 
 bluetoothctl power on >/dev/null
+bluetoothctl agent NoInputNoOutput >/dev/null
+bluetoothctl default-agent >/dev/null
 bluetoothctl pairable on >/dev/null
 bluetoothctl discoverable on >/dev/null
 
@@ -28,4 +30,4 @@ if [ "$PAIRABLE_STATE" != "yes" ] || [ "$DISCOVERABLE_STATE" != "yes" ]; then
   exit 1
 fi
 
-echo "pairing mode enabled"
+echo "pairing mode enabled (agent=NoInputNoOutput default-agent=yes)"

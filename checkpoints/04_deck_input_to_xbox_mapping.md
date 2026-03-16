@@ -24,9 +24,9 @@ Ignore:
 
 ## Required Repo Artifacts
 - Rust crates:
-  - `crates/inputd/` (evdev discovery + event processing)
+  - `crates/input/` — **library crate** for evdev discovery + event processing (not a standalone daemon; imported by `hidd`)
   - `crates/common/` (mapping + normalization)
-  - `crates/hidd/` updated to accept real input state
+  - `crates/hidd/` updated to accept real input state from `crates/input/` and replace synthetic pattern generation
 - Config:
   - `configs/mapping/xbox.toml` (deadzone, axis scaling, code mapping)
 - Docs:
@@ -36,6 +36,8 @@ Ignore:
   - `controllerosctl input list` (list detected input devices)
   - `controllerosctl input monitor` (prints mapped state changes)
 
+**Architecture note:** `hidd` owns the main report loop, the BLE GATT HOG connection, and report transmission. The evdev input reader runs as a thread within `hidd`, feeding `InputReport` structs into the existing report loop. This avoids unnecessary IPC between separate daemons. The `crates/input/` library provides evdev discovery, event reading, and mapping logic that `hidd` calls directly.
+
 ---
 
 ## Implementation Requirements
@@ -43,7 +45,8 @@ Ignore:
    - Identify correct Deck input devices without hardcoding `/dev/input/eventX`.
 2. Mapping must normalize axes and apply deadzones.
 3. Ignored controls must not affect HID state.
-4. `hidd` emits reports continuously based on real input state.
+4. `hidd` emits reports continuously based on real input state (replacing synthetic pattern generation).
+5. Remove UHID from the production report loop — UHID should only be used in `--self-test` mode, not during normal BLE operation. The BLE data path is via GATT HOG, not UHID.
 
 ---
 

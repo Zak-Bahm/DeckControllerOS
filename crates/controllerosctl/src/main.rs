@@ -7,8 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use common::config::DEFAULT_HID_CONFIG_PATH;
-use common::hid::{HID_REPORT_DESCRIPTOR, INPUT_REPORT_LEN};
+use common::config::{HidConfig, DEFAULT_HID_CONFIG_PATH};
 
 fn main() -> ExitCode {
     match run() {
@@ -118,8 +117,17 @@ fn infer_hidd_path() -> PathBuf {
 }
 
 fn run_hid_self_test(args: &Args) -> Result<()> {
-    println!("descriptor_len={}", HID_REPORT_DESCRIPTOR.len());
-    println!("report_len={INPUT_REPORT_LEN}");
+    let cfg = HidConfig::load_from_path(&args.config_path)?;
+    println!("profile_mode={}", cfg.profile.mode.as_str());
+    println!(
+        "profile_identity=vid=0x{:04x} pid=0x{:04x} version=0x{:04x} country={}",
+        cfg.profile.vendor_id, cfg.profile.product_id, cfg.profile.version, cfg.profile.country
+    );
+    println!(
+        "descriptor_len={}",
+        cfg.profile.mode.report_descriptor().len()
+    );
+    println!("report_len={}", cfg.profile.mode.input_report_len());
 
     run_hidd(args, &["--self-test", "--config", &args.config_path])?;
     println!("UHID OK");

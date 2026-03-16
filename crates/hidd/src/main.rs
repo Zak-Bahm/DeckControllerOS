@@ -2,19 +2,36 @@
 
 use std::env;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::ExitCode;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use common::config::{AxisName, HidConfig, PatternConfig, DEFAULT_HID_CONFIG_PATH};
-use common::hid::{InputReport, HID_REPORT_DESCRIPTOR};
+use common::hid::{InputReport, OutputReport};
+
+mod hog;
+use hog::HogRuntime;
 
 const DEV_UHID: &str = "/dev/uhid";
 const UHID_DESTROY: u32 = 1;
+const UHID_START: u32 = 2;
+const UHID_STOP: u32 = 3;
+const UHID_OPEN: u32 = 4;
+const UHID_CLOSE: u32 = 5;
+const UHID_OUTPUT: u32 = 6;
+const UHID_GET_REPORT: u32 = 9;
+const UHID_GET_REPORT_REPLY: u32 = 10;
 const UHID_CREATE2: u32 = 11;
 const UHID_INPUT2: u32 = 12;
+const UHID_SET_REPORT: u32 = 13;
+const UHID_SET_REPORT_REPLY: u32 = 14;
+
+const UHID_EVENT_SIZE: usize = 4376;
+const UHID_OUTPUT_DATA_MAX: usize = 4096;
+const UHID_ERR_NOT_SUPPORTED: u16 = 95;
+
 const BUS_BLUETOOTH: u16 = 0x05;
 
 fn main() -> ExitCode {
@@ -55,8 +72,13 @@ fn run() -> Result<()> {
     let cfg = HidConfig::load_from_path(&config_path)?;
     if validate_config {
         println!(
-            "HID config OK: name=\"{}\" vid=0x{:04x} pid=0x{:04x} rate={}Hz",
-            cfg.device.name, cfg.device.vendor_id, cfg.device.product_id, cfg.report.rate_hz
+            "HID config OK: name=\"{}\" profile={} vid=0x{:04x} pid=0x{:04x} version=0x{:04x} rate={}Hz",
+            cfg.device.name,
+            cfg.profile.mode.as_str(),
+            cfg.profile.vendor_id,
+            cfg.profile.product_id,
+            cfg.profile.version,
+            cfg.report.rate_hz
         );
         return Ok(());
     }
@@ -89,10 +111,19 @@ fn run_self_test(cfg: &HidConfig) -> Result<()> {
 fn run_daemon(cfg: &HidConfig) -> Result<()> {
     let mut uhid = UhidDevice::open()?;
     uhid.create(cfg)?;
+    uhid.start_event_drain()?;
+    let hog = HogRuntime::register(cfg)?;
+
     println!(
-        "hidd started: name=\"{}\" vid=0x{:04x} pid=0x{:04x} rate={}Hz",
-        cfg.device.name, cfg.device.vendor_id, cfg.device.product_id, cfg.report.rate_hz
+        "hidd started: name=\"{}\" profile={} vid=0x{:04x} pid=0x{:04x} version=0x{:04x} rate={}Hz",
+        cfg.device.name,
+        cfg.profile.mode.as_str(),
+        cfg.profile.vendor_id,
+        cfg.profile.product_id,
+        cfg.profile.version,
+        cfg.report.rate_hz
     );
+    println!("hidd BLE HOGP registered: adapter={}", hog.adapter_path());
 
     let period = Duration::from_nanos(1_000_000_000u64 / u64::from(cfg.report.rate_hz));
     let mut pattern = PatternState::new(&cfg.pattern);
@@ -100,7 +131,9 @@ fn run_daemon(cfg: &HidConfig) -> Result<()> {
 
     loop {
         let report = pattern.next_report();
-        uhid.send_input_report(&report.to_bytes())?;
+        let report_bytes = report.to_bytes();
+        uhid.send_input_report(&report_bytes)?;
+        hog.publish_input_report(&report_bytes)?;
         next_tick += period;
 
         let now = Instant::now();
@@ -139,8 +172,22 @@ impl UhidDevice {
         Ok(())
     }
 
+    fn start_event_drain(&self) -> Result<()> {
+        let mut io = self
+            .file
+            .try_clone()
+            .map_err(|e| anyhow!("failed to clone UHID fd for event drain: {e}"))?;
+
+        thread::Builder::new()
+            .name("hidd-uhid-events".to_string())
+            .spawn(move || drain_uhid_events(&mut io))
+            .map_err(|e| anyhow!("failed to spawn UHID event drain thread: {e}"))?;
+
+        Ok(())
+    }
+
     fn send_input_report(&mut self, report: &[u8]) -> Result<()> {
-        if report.len() > 4096 {
+        if report.len() > UHID_OUTPUT_DATA_MAX {
             return Err(anyhow!(
                 "report too large for UHID_INPUT2: {}",
                 report.len()
@@ -196,25 +243,174 @@ fn build_create2_event(cfg: &HidConfig) -> Vec<u8> {
     const OFF_COUNTRY: usize = 272;
     const OFF_RD_DATA: usize = 276;
 
+    let descriptor = cfg.profile.mode.report_descriptor();
+
     let mut payload = vec![0u8; CREATE2_PAYLOAD_LEN];
     write_padded(&mut payload[OFF_NAME..OFF_PHYS], &cfg.device.name);
     write_padded(&mut payload[OFF_PHYS..OFF_UNIQ], "bluetooth");
-    payload[OFF_RD_SIZE..OFF_RD_SIZE + 2]
-        .copy_from_slice(&(HID_REPORT_DESCRIPTOR.len() as u16).to_ne_bytes());
+    write_padded(
+        &mut payload[OFF_UNIQ..OFF_RD_SIZE],
+        cfg.profile.mode.as_str(),
+    );
+
+    payload[OFF_RD_SIZE..OFF_RD_SIZE + 2].copy_from_slice(&(descriptor.len() as u16).to_ne_bytes());
     payload[OFF_BUS..OFF_BUS + 2].copy_from_slice(&BUS_BLUETOOTH.to_ne_bytes());
     payload[OFF_VENDOR..OFF_VENDOR + 4]
-        .copy_from_slice(&(u32::from(cfg.device.vendor_id)).to_ne_bytes());
+        .copy_from_slice(&(u32::from(cfg.profile.vendor_id)).to_ne_bytes());
     payload[OFF_PRODUCT..OFF_PRODUCT + 4]
-        .copy_from_slice(&(u32::from(cfg.device.product_id)).to_ne_bytes());
-    payload[OFF_VERSION..OFF_VERSION + 4].copy_from_slice(&1u32.to_ne_bytes());
-    payload[OFF_COUNTRY..OFF_COUNTRY + 4].copy_from_slice(&0u32.to_ne_bytes());
-    payload[OFF_RD_DATA..OFF_RD_DATA + HID_REPORT_DESCRIPTOR.len()]
-        .copy_from_slice(&HID_REPORT_DESCRIPTOR);
+        .copy_from_slice(&(u32::from(cfg.profile.product_id)).to_ne_bytes());
+    payload[OFF_VERSION..OFF_VERSION + 4]
+        .copy_from_slice(&(u32::from(cfg.profile.version)).to_ne_bytes());
+    payload[OFF_COUNTRY..OFF_COUNTRY + 4]
+        .copy_from_slice(&(u32::from(cfg.profile.country)).to_ne_bytes());
+    payload[OFF_RD_DATA..OFF_RD_DATA + descriptor.len()].copy_from_slice(descriptor);
 
     let mut event = Vec::with_capacity(4 + payload.len());
     event.extend_from_slice(&UHID_CREATE2.to_ne_bytes());
     event.extend_from_slice(&payload);
     event
+}
+
+fn drain_uhid_events(io: &mut std::fs::File) {
+    let mut event = [0u8; UHID_EVENT_SIZE];
+    let mut dropped_output_reports = 0u64;
+
+    loop {
+        match io.read_exact(&mut event) {
+            Ok(()) => {
+                if let Err(err) = handle_uhid_event(io, &event, &mut dropped_output_reports) {
+                    eprintln!("hidd: failed to handle UHID event: {err}");
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) => {
+                eprintln!("hidd: UHID event drain stopped: {err}");
+                return;
+            }
+        }
+    }
+}
+
+fn handle_uhid_event(
+    io: &mut std::fs::File,
+    event: &[u8],
+    dropped_output_reports: &mut u64,
+) -> Result<()> {
+    let event_type = read_u32(event, 0).ok_or_else(|| anyhow!("short UHID event"))?;
+
+    match event_type {
+        UHID_START => {
+            if let Some(flags) = read_u64(event, 4) {
+                eprintln!("hidd: UHID_START flags=0x{flags:016x}");
+            }
+        }
+        UHID_STOP => {
+            eprintln!("hidd: UHID_STOP");
+        }
+        UHID_OPEN => {
+            eprintln!("hidd: UHID_OPEN");
+        }
+        UHID_CLOSE => {
+            eprintln!("hidd: UHID_CLOSE");
+        }
+        UHID_OUTPUT => {
+            let size = read_u16(event, 4 + UHID_OUTPUT_DATA_MAX)
+                .map(usize::from)
+                .unwrap_or(0)
+                .min(UHID_OUTPUT_DATA_MAX);
+            let rtype = event
+                .get(4 + UHID_OUTPUT_DATA_MAX + 2)
+                .copied()
+                .unwrap_or(0);
+            let data = &event[4..4 + size];
+
+            *dropped_output_reports += 1;
+            if *dropped_output_reports <= 3 || *dropped_output_reports % 100 == 0 {
+                if let Some(parsed) = OutputReport::parse(data) {
+                    eprintln!(
+                        "hidd: dropped UHID_OUTPUT rtype={rtype} rumble={{lt:{}, rt:{}, weak:{}, strong:{}}} count={}",
+                        parsed.left_trigger_magnitude,
+                        parsed.right_trigger_magnitude,
+                        parsed.weak_motor_magnitude,
+                        parsed.strong_motor_magnitude,
+                        *dropped_output_reports
+                    );
+                } else {
+                    let report_id = data.first().copied().unwrap_or(0);
+                    eprintln!(
+                        "hidd: dropped UHID_OUTPUT rtype={rtype} report_id=0x{report_id:02x} size={size} count={}",
+                        *dropped_output_reports
+                    );
+                }
+            }
+        }
+        UHID_GET_REPORT => {
+            let id = read_u32(event, 4).unwrap_or(0);
+            let rnum = event.get(8).copied().unwrap_or(0);
+            let rtype = event.get(9).copied().unwrap_or(0);
+            eprintln!(
+                "hidd: UHID_GET_REPORT id={id} rnum={rnum} rtype={rtype}; replying not supported"
+            );
+            write_get_report_reply(io, id, UHID_ERR_NOT_SUPPORTED, &[])?;
+        }
+        UHID_SET_REPORT => {
+            let id = read_u32(event, 4).unwrap_or(0);
+            let rnum = event.get(8).copied().unwrap_or(0);
+            let rtype = event.get(9).copied().unwrap_or(0);
+            let size = read_u16(event, 10).map(usize::from).unwrap_or(0);
+            eprintln!(
+                "hidd: UHID_SET_REPORT id={id} rnum={rnum} rtype={rtype} size={size}; dropping payload"
+            );
+            // Accept writes but ignore payload in MVP (no haptics implementation).
+            write_set_report_reply(io, id, 0)?;
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+fn write_get_report_reply(io: &mut std::fs::File, id: u32, err: u16, data: &[u8]) -> Result<()> {
+    if data.len() > UHID_OUTPUT_DATA_MAX {
+        return Err(anyhow!("get-report reply too large: {}", data.len()));
+    }
+
+    let mut event = Vec::with_capacity(12 + data.len());
+    event.extend_from_slice(&UHID_GET_REPORT_REPLY.to_ne_bytes());
+    event.extend_from_slice(&id.to_ne_bytes());
+    event.extend_from_slice(&err.to_ne_bytes());
+    event.extend_from_slice(&(data.len() as u16).to_ne_bytes());
+    event.extend_from_slice(data);
+
+    io.write_all(&event)
+        .map_err(|e| anyhow!("failed to write UHID_GET_REPORT_REPLY: {e}"))
+}
+
+fn write_set_report_reply(io: &mut std::fs::File, id: u32, err: u16) -> Result<()> {
+    let mut event = Vec::with_capacity(10);
+    event.extend_from_slice(&UHID_SET_REPORT_REPLY.to_ne_bytes());
+    event.extend_from_slice(&id.to_ne_bytes());
+    event.extend_from_slice(&err.to_ne_bytes());
+
+    io.write_all(&event)
+        .map_err(|e| anyhow!("failed to write UHID_SET_REPORT_REPLY: {e}"))
+}
+
+fn read_u16(buf: &[u8], offset: usize) -> Option<u16> {
+    let bytes = buf.get(offset..offset + 2)?;
+    Some(u16::from_ne_bytes([bytes[0], bytes[1]]))
+}
+
+fn read_u32(buf: &[u8], offset: usize) -> Option<u32> {
+    let bytes = buf.get(offset..offset + 4)?;
+    Some(u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn read_u64(buf: &[u8], offset: usize) -> Option<u64> {
+    let bytes = buf.get(offset..offset + 8)?;
+    Some(u64::from_ne_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ]))
 }
 
 #[derive(Debug, Clone)]
@@ -312,12 +508,12 @@ impl PatternState {
 
 fn apply_axis_value(report: &mut InputReport, axis: AxisName, value: i16) {
     match axis {
-        AxisName::Lx => report.lx = value as i8,
-        AxisName::Ly => report.ly = value as i8,
-        AxisName::Rx => report.rx = value as i8,
-        AxisName::Ry => report.ry = value as i8,
-        AxisName::Lt => report.lt = value as u8,
-        AxisName::Rt => report.rt = value as u8,
+        AxisName::Lx => report.lx = value,
+        AxisName::Ly => report.ly = value,
+        AxisName::Rx => report.rx = value,
+        AxisName::Ry => report.ry = value,
+        AxisName::Lt => report.lt = value.max(0) as u16,
+        AxisName::Rt => report.rt = value.max(0) as u16,
     }
 }
 

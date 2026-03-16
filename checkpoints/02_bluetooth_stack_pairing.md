@@ -54,7 +54,8 @@ Enable Bluetooth in ControllerOS so a host device can discover and pair with the
   - `Pairable: yes`
 
 ### C. Host Pairing (no host software)
-- Host discovers and pairs with `SteamDeck-ControllerOS`.
+- Host discovers and pairs with the adapter name configured in `configs/bluez/main.conf`
+  (current default: `ControllerOS Xbox Controller`).
 - Successful if:
   - `bluetoothctl paired-devices` lists host device.
 

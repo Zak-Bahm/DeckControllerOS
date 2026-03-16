@@ -1,25 +1,5 @@
 # Checkpoint 03 Plan — Bluetooth HID Gamepad Exposure (UHID/HOGP)
 
-## Current Repo Evaluation
-- [x] Existing prerequisites from checkpoints 01/02:
-  - `configs/kernel/steamdeck_defconfig` already enables `CONFIG_UHID=y`, Bluetooth, and `CONFIG_INPUT_EVDEV=y`.
-  - BlueZ + DBus boot integration and pairing/persistence scripts are present.
-- [x] Development loop tooling available:
-  - Host payload staging: `scripts/dev_stage_payload.sh`
-  - Host HTTP serving: `scripts/dev_http_serve.sh`
-  - Deck live updater (in image): `controlleros-dev-update`, `controlleros-dev-list`
-  - Workflow guide: `docs/dev_testing_loops.md`
-- [x] Implemented checkpoint-03 artifacts:
-  - Rust workspace and required crates exist (`Cargo.toml`, `crates/common`, `crates/hidd`, `crates/controllerosctl`).
-  - HID config exists at `configs/hid/hid.toml`.
-  - Build integration installs `hidd`, `controllerosctl`, and `/etc/controlleros/hid.toml`.
-  - `controllerosctl hid self-test` exists and passes local quality gates.
-- [ ] Remaining gaps to close checkpoint 03:
-  - No HID profile documentation at `docs/hid_profile.md`.
-  - No boot-time `hidd` init integration yet (no `S45hidd` script in `configs/init/`).
-  - `hidd` currently exposes a generic gamepad descriptor, not an Xbox One BLE-compatible profile.
-  - `bluetoothd` currently starts with `--noplugin=input,hog`; HOGP exposure path needs explicit validation/update for host enumeration goals.
-
 ## Development Workflow (applies to every step)
 - Loop 1 (host-only, default):
   - Use `cargo check/test/clippy/fmt` for rapid iteration without Deck reboot.
@@ -94,7 +74,10 @@
 - This is the first step that requires the full rebuild/reboot loop.
 
 ### Step 7 — Update `hidd` to Xbox One BLE-compatible HID profile
-- [ ] Pending
+- [x] Done (2026-03-15, validated on Linux host + Android)
+
+**Architecture note:** The BLE HID path uses a custom GATT HID-over-GATT Profile (HOGP) application registered with BlueZ via D-Bus (`RegisterApplication` + `RegisterAdvertisement`), implemented in `crates/hidd/src/hog.rs`. UHID is retained for `--self-test` diagnostics only and is not part of the BLE data path. The daemon sends reports to both UHID (local) and GATT HOG (BLE) during the pattern loop; the UHID path should be removed from the production report loop in checkpoint 04.
+
 **Actions:**
 - Replace the current generic descriptor/report packing with an Xbox One BLE-compatible profile (default target: model 1708 compatibility).
 - Add shared report types/constants for Xbox-style report layout and report IDs while keeping a single HID interface.
@@ -103,22 +86,23 @@
 - Add minimal output-report handling in `hidd` (drain/log/drop safely; no haptics implementation in MVP).
 - Add `docs/hid_profile.md` documenting descriptor, report format, and known host behavior.
 - Extend `controllerosctl hid self-test` output with active profile + identity in addition to descriptor/report lengths.
+- Implement BLE GATT HOGP runtime (`hog.rs`): HID Service (0x1812) with report characteristics and Report Reference descriptors for all 4 report IDs, Battery Service (0x180F), Device Information Service (0x180A) with PnP ID, and LE advertisement with gamepad appearance.
 **Complete when:**
 - `controllerosctl hid self-test` prints Xbox profile identity and exits 0.
 - A paired host identifies the controller as Xbox-compatible (or platform-equivalent XInput-class BLE gamepad naming).
 - Host receives changing test-pattern input while using the Xbox profile.
 
 ### Step 8 — Boot-time daemon integration and reproducible self-check flow
-- [ ] Pending
+- [x] Done (2026-03-15)
 **Actions:**
-- Add init script (or systemd unit) to start `hidd` after Bluetooth stack readiness.
-- Update Bluetooth daemon startup/config as needed so HID over GATT is exposed correctly during runtime.
-- Create script to run on host that tests current state end-to-end: pairing, connecting, receiving input test pattern.
-**Complete when:**
-- After boot, `hidd` is running and prepared to emit reports for a paired host.
-- A paired host can fully connect and keep an active controller session (not just bond).
-- Host enumerates the Deck as a game controller and receives changing reports.
-- Service behavior is first validated with Loop 2 manual restart, then confirmed with host script.
+- Added `configs/init/S45hidd` init script to start `hidd` after Bluetooth stack readiness (waits up to 10s for adapter).
+- `hidd` registers a `NoInputNoOutput` BlueZ pairing agent via D-Bus (`org.bluez.Agent1`) for automatic Just Works BLE pairing.
+- Created `scripts/bt_checkpoint03_host_validate.sh` for host-side end-to-end testing (discovery, pair, trust, connect, input observation).
+- Created `configs/dev/controlleros-dev-debug` for consolidated on-Deck diagnostics.
+**Validated:**
+- Linux host: discovery, pairing (`Bonded: yes`), connection, GATT service enumeration (GAP, GATT, DIS, Battery, HID), notification subscription, `evtest` confirmed BTN_SOUTH test pattern on `/dev/input/event16`.
+- Android: discovery, pairing, connection as gamepad.
+- Deck logs confirmed agent authorization, StartNotify for all 3 input reports + battery level.
 
 ---
 

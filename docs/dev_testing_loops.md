@@ -113,11 +113,11 @@ Example:
 
 ```sh
 controlleros-dev-run \
-  --server-url http://<DEV_MACHINE_IP>:8000 \
+  --base-url http://<DEV_MACHINE_IP>:8000 \
   "bluetoothctl show && /etc/init.d/S45hidd restart && /var/lib/controlleros/dev/bin/controllerosctl hid self-test --hidd /var/lib/controlleros/dev/bin/hidd --config /var/lib/controlleros/dev/configs/hid/hid.toml"
 
 controlleros-dev-run \
-  --server-url http://<DEV_MACHINE_IP>:8000 \
+  --base-url http://<DEV_MACHINE_IP>:8000 \
   --timeout-seconds 10 \
   "/var/lib/controlleros/dev/bin/hidd"
 ```
