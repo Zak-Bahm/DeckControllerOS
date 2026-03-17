@@ -48,6 +48,7 @@ fn run() -> Result<()> {
     let mut validate_config = false;
     let mut self_test = false;
     let mut config_path = DEFAULT_HID_CONFIG_PATH.to_string();
+    let mut mapping_config_path: Option<String> = None;
 
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -58,6 +59,12 @@ fn run() -> Result<()> {
                 config_path = args
                     .next()
                     .ok_or_else(|| anyhow!("missing value for --config"))?;
+            }
+            "--mapping-config" => {
+                mapping_config_path = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow!("missing value for --mapping-config"))?,
+                );
             }
             "--help" | "-h" => {
                 print_help();
@@ -88,16 +95,20 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    run_daemon(&cfg)
+    match mapping_config_path {
+        Some(path) => run_daemon_live(&cfg, &path),
+        None => run_daemon_pattern(&cfg),
+    }
 }
 
 fn print_help() {
     println!("Usage:");
     println!("  hidd --validate-config [--config <path>]");
     println!("  hidd --self-test [--config <path>]");
-    println!("  hidd [--config <path>]");
+    println!("  hidd [--config <path>] [--mapping-config <path>]");
     println!("Defaults:");
     println!("  --config {}", DEFAULT_HID_CONFIG_PATH);
+    println!("  --mapping-config  (none; uses synthetic pattern when omitted)");
 }
 
 fn run_self_test(cfg: &HidConfig) -> Result<()> {
@@ -108,20 +119,65 @@ fn run_self_test(cfg: &HidConfig) -> Result<()> {
     Ok(())
 }
 
-fn run_daemon(cfg: &HidConfig) -> Result<()> {
+/// Production mode: read real controller input via hidraw and publish via BLE GATT HOG.
+/// UHID is not used — BLE is the only output path.
+fn run_daemon_live(cfg: &HidConfig, mapping_config_path: &str) -> Result<()> {
+    let mapping = input::MappingConfig::from_file(mapping_config_path)
+        .map_err(|e| anyhow!("mapping config: {e}"))?;
+    let reader = input::InputReader::new(mapping).map_err(|e| anyhow!("{e}"))?;
+
+    let hog = HogRuntime::register(cfg)?;
+
+    println!(
+        "hidd started: name=\"{}\" profile={} vid=0x{:04x} pid=0x{:04x} version=0x{:04x} rate={}Hz mapping={}",
+        cfg.device.name,
+        cfg.profile.mode.as_str(),
+        cfg.profile.vendor_id,
+        cfg.profile.product_id,
+        cfg.profile.version,
+        cfg.report.rate_hz,
+        mapping_config_path,
+    );
+    println!("hidd BLE HOGP registered: adapter={}", hog.adapter_path());
+
+    let period = Duration::from_nanos(1_000_000_000u64 / u64::from(cfg.report.rate_hz));
+    let mut next_tick = Instant::now();
+
+    loop {
+        let report = reader.current_report();
+        let report_bytes = report.to_bytes();
+        hog.publish_input_report(&report_bytes)?;
+        next_tick += period;
+
+        let now = Instant::now();
+        if next_tick > now {
+            thread::sleep(next_tick - now);
+        } else {
+            next_tick = now;
+        }
+    }
+}
+
+/// Pattern mode: generate synthetic test patterns and publish via both UHID and BLE.
+/// Used when no --mapping-config is provided (backwards compatible with checkpoint 03).
+fn run_daemon_pattern(cfg: &HidConfig) -> Result<()> {
     let mut uhid = UhidDevice::open()?;
     uhid.create(cfg)?;
     uhid.start_event_drain()?;
     let hog = HogRuntime::register(cfg)?;
 
     println!(
-        "hidd started: name=\"{}\" profile={} vid=0x{:04x} pid=0x{:04x} version=0x{:04x} rate={}Hz",
+        "hidd started: name=\"{}\" profile={} vid=0x{:04x} pid=0x{:04x} version=0x{:04x} rate={}Hz pattern={}",
         cfg.device.name,
         cfg.profile.mode.as_str(),
         cfg.profile.vendor_id,
         cfg.profile.product_id,
         cfg.profile.version,
-        cfg.report.rate_hz
+        cfg.report.rate_hz,
+        match &cfg.pattern {
+            PatternConfig::ButtonToggle { button_index, .. } => format!("button_toggle(btn={button_index})"),
+            PatternConfig::AxisSweep { axis, .. } => format!("axis_sweep({axis:?})"),
+        },
     );
     println!("hidd BLE HOGP registered: adapter={}", hog.adapter_path());
 

@@ -8,3 +8,4 @@ anyhow = "=1.0.100"
 common = { path = "../common" }
 dbus = "=0.9.9"
 dbus-crossroads = "=0.5.2"
+input = { path = "../input" }

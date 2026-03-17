@@ -13,7 +13,6 @@
 - Checkpoint 03 + 03.5 complete and validated on real hosts (Linux + Android).
 - `hidd` currently runs a synthetic pattern loop (`PatternState`) and publishes reports via both UHID and BLE GATT HOG.
 - `InputReport` struct and Xbox One S 1708 HID descriptor already defined in `crates/common/src/hid.rs`.
-- `crates/input/` does not yet exist.
 - Kernel version: 6.6.79 (custom Buildroot build, defconfig at `configs/kernel/steamdeck_defconfig`).
 - Target: x86_64-unknown-linux-gnu (Buildroot glibc toolchain).
 - Rust binaries cross-compiled via Buildroot's `cargo-package` infrastructure with offline vendoring.
@@ -21,8 +20,18 @@
 ## Build system notes
 - `crates/input/` is a library crate imported by `hidd` and `controllerosctl`. It does **not** need its own Buildroot package `.mk` file — it is built automatically as a workspace dependency. The existing vendoring hooks in `controlleros-hidd.mk` and `controllerosctl.mk` will vendor its transitive dependencies.
 - New crate dependencies must be version-pinned (exact `=x.y.z`) and present in `Cargo.lock` before Buildroot build.
-- Use the **`evdev` crate** (pure Rust, uses `libc` ioctls directly) — NOT `evdev-rs` which wraps the `libevdev` C library and would require adding `BR2_PACKAGE_LIBEVDEV=y` plus cross-compilation linking. The pure Rust `evdev` crate has no system library dependency beyond `libc` (already available).
-- `#![forbid(unsafe_code)]` is valid for `crates/input/` — the `evdev` crate contains unsafe internally but exposes a safe public API.
+- The `evdev` crate (pure Rust) is retained for the `input list` CLI command which enumerates evdev devices for diagnostics. It is NOT used for reading controller input.
+- The `libc` crate is used for `ioctl` and `poll` syscalls in the hidraw module. This requires limited `unsafe` code confined to `crates/input/src/hidraw.rs`.
+
+## Input approach: hidraw (not evdev)
+
+The initial plan used evdev to read controller input. This was replaced with hidraw after discovering that the `hid-steam` kernel driver has two guards preventing evdev event emission on the Deck:
+1. `steam_input_open()` skips lizard mode disable for `STEAM_QUIRK_DECK` devices
+2. `steam_do_deck_input_event()` checks `gamepad_mode` flag (defaults to false)
+
+The hidraw approach reads raw 64-byte HID reports directly from the controller's client device, bypassing both guards. Lizard mode is disabled by sending HID feature reports from userspace, matching the kernel's `steam_set_lizard_mode(false)` implementation.
+
+See `checkpoints/04_deck_input_to_xbox_mapping.md` for the full hidraw protocol documentation.
 
 ## Plan (incremental)
 
@@ -30,154 +39,133 @@
 - [x] Done (2026-03-16)
 **Actions:**
 - Add the following to `configs/kernel/steamdeck_defconfig`:
-  - `CONFIG_HID=y` — HID core subsystem (likely auto-selected by UHID but should be explicit).
-  - `CONFIG_HID_GENERIC=y` — Generic HID driver fallback for unrecognized HID devices.
-  - `CONFIG_HID_STEAM=y` — Steam Controller/Deck embedded controller driver (`hid-steam`). This is the driver that creates evdev device nodes for the Deck's sticks, buttons, triggers, and d-pad. Without it, no input devices appear. Present in kernel 6.6.x at `drivers/hid/hid-steam.c`.
-  - `CONFIG_INPUT_JOYDEV=y` — Optional but useful: provides `/dev/input/js*` for joystick testing tools like `jstest`.
-- Requires full ISO rebuild + Deck reboot to validate.
-- On Deck, verify with: `ls /dev/input/event*` and `cat /proc/bus/input/devices` to confirm Deck controller appears.
+  - `CONFIG_HID=y` — HID core subsystem.
+  - `CONFIG_HID_GENERIC=y` — Generic HID driver fallback.
+  - `CONFIG_HID_STEAM=y` — Steam Controller/Deck embedded controller driver (`hid-steam`).
+  - `CONFIG_HIDRAW=y` — Hidraw interface for raw HID device access from userspace.
+  - `CONFIG_INPUT_JOYDEV=y` — Provides `/dev/input/js*` for testing tools.
 **Complete when:**
-- Kernel boots with `hid-steam` loaded (check `lsmod` or `dmesg | grep -i steam`).
-- At least one evdev device node exists for the Deck's gamepad controls.
-- `cat /proc/bus/input/devices` shows a device with ABS and KEY capabilities matching sticks/buttons.
+- Kernel boots with `hid-steam` loaded.
+- `/sys/class/hidraw/` exists and contains Valve devices.
 
-**Risk note:** If `hid-steam` does not claim the Deck's Neptune controller on kernel 6.6.79, check `dmesg` for HID enumeration. The Neptune controller USB VID:PID is `28DE:1205`. If the driver doesn't match, `CONFIG_HID_GENERIC=y` provides a fallback that exposes raw HID events, though axis ranges/codes may differ. Document any deviations.
+**Validated (2026-03-16):** `hid-steam` loaded and created devices for VID `28DE` PID `1205`:
+- `hidraw0` — Keyboard interface (has_input=yes). Ignore.
+- `hidraw1` — Mouse interface (has_input=yes). Ignore.
+- `hidraw2` — **Client device** (has_input=no). This is the one we open for raw input.
 
-**Validated (2026-03-16):** `hid-steam` loaded and created 4 input devices for VID `28DE` PID `1205`:
-- `event7` — Keyboard interface (volume/power keys). Ignore.
-- `event8` — Mouse interface (trackpad relative axes). Ignore.
-- **`event9` ("Steam Deck")** — **Gamepad** with `js0`. ABS axes: `ABS_X`, `ABS_Y`, `ABS_RX`, `ABS_RY`, `ABS_HAT0X/Y`, `ABS_HAT1X/Y`, `ABS_HAT2X/Y`. Buttons in EV_KEY bitmask.
-- `event10` — Motion sensors (gyro/accel). Ignore.
-
-**Verified from kernel source (`drivers/hid/hid-steam.c`, `STEAM_QUIRK_DECK` path):**
-
-Axes (gamepad device):
-- `ABS_X` / `ABS_Y`: Left stick, range -32767..32767 (Y inverted by driver)
-- `ABS_RX` / `ABS_RY`: Right stick, range -32767..32767 (Y inverted by driver)
-- `ABS_HAT2Y`: **Left trigger** (analog), range 0..32767
-- `ABS_HAT2X`: **Right trigger** (analog), range 0..32767
-- `ABS_HAT0X` / `ABS_HAT0Y`: Left touchpad (ignore MVP)
-- `ABS_HAT1X` / `ABS_HAT1Y`: Right touchpad (ignore MVP)
-
-Buttons (MVP):
-- `BTN_A`(0x130), `BTN_B`(0x131), `BTN_X`(0x133), `BTN_Y`(0x134)
-- `BTN_TL`(0x136)/LB, `BTN_TR`(0x137)/RB
-- `BTN_SELECT`(0x13a)/Back, `BTN_START`(0x13b)/Start
-- `BTN_THUMBL`(0x13d)/LS click, `BTN_THUMBR`(0x13e)/RS click
-- `BTN_DPAD_UP/DOWN/LEFT/RIGHT`(0x220-0x223) — **D-pad is buttons, NOT hat axes**
-
-Buttons (ignore MVP): `BTN_TL2`/`BTN_TR2` (digital trigger), `BTN_MODE` (Steam logo), `BTN_THUMB`/`BTN_THUMB2` (pad touch), `BTN_TRIGGER_HAPPY1-4` (grips), `BTN_GEAR_DOWN`/`BTN_GEAR_UP` (back levers), `BTN_BASE` (quick access).
+Also creates evdev devices (used by `input list` for diagnostics):
+- `event7` — Keyboard interface. Ignore.
+- `event8` — Mouse interface. Ignore.
+- `event9` ("Steam Deck") — Gamepad with sticks/buttons/triggers.
+- `event10` — Motion sensors. Ignore.
 
 ### Step 1 — Create `crates/input/` crate skeleton and workspace integration
 - [x] Done (2026-03-16)
 **Actions:**
 - Create `crates/input/` as a library crate.
 - Add to workspace `Cargo.toml`.
-- Enforce `#![forbid(unsafe_code)]`.
-- Add `evdev` crate dependency (pure Rust, pin exact version).
-- Stub out public API: `InputReader`, `InputEvent`, device discovery functions.
+- Add `evdev` crate dependency (for discovery), `libc` (for hidraw ioctl/poll).
+- Stub out public API: `InputReader`, device discovery functions.
 **Complete when:**
 - `cargo check --workspace` passes with the new crate.
-- Verified through Loop 1 only.
 
 ### Step 2 — Implement evdev device discovery
 - [x] Done (2026-03-16)
 **Actions:**
-- Implement device enumeration: scan `/dev/input/event*`, read device name/phys/capabilities via evdev ioctls.
-- Identify Steam Deck input devices by name/vendor/capabilities (not hardcoded event numbers).
-  - Primary match: look for the `hid-steam` driver device (name contains "Steam" or "Valve", VID `0x28DE`).
-  - Fallback match: any device providing both `EV_ABS` (sticks/triggers) and `EV_KEY` (buttons) with the expected axis codes.
-  - Expected evdev codes from `hid-steam` on Deck: `ABS_X`, `ABS_Y` (left stick), `ABS_RX`, `ABS_RY` (right stick), `ABS_HAT2X`/`ABS_HAT2Y` or `ABS_Z`/`ABS_RZ` (triggers), `ABS_HAT0X`/`ABS_HAT0Y` (d-pad), `BTN_SOUTH`/`BTN_EAST`/`BTN_NORTH`/`BTN_WEST` (ABXY), `BTN_TL`/`BTN_TR` (bumpers), `BTN_START`/`BTN_SELECT`.
-  - **Important:** Verify actual evdev codes on Deck hardware in Step 0 using `evtest` or `cat /proc/bus/input/devices`. The `hid-steam` driver may use non-standard codes — document any differences.
-- Expose a `discover_devices()` function returning a list of discovered devices with metadata (name, path, capabilities).
-- Add unit tests for discovery logic (capability filtering, name matching).
+- Implement device enumeration: scan `/dev/input/event*`, read device name/phys/capabilities.
+- Identify Steam Deck input devices by name/vendor/capabilities.
+- Expose a `discover_devices()` function returning a list of discovered devices with metadata.
+- Add unit tests for discovery logic.
 **Complete when:**
-- `discover_devices()` returns structured device info on any Linux host (may find no Deck devices on dev machine, but should not crash).
-- On Deck (Loop 2), correctly identifies stick/button input devices.
-- Actual evdev codes documented for use in Step 3 mapping config.
+- `discover_devices()` returns structured device info.
+- 8 unit tests pass.
 
 ### Step 3 — Define mapping config and types
 - [x] Done (2026-03-16)
 **Actions:**
-- Create `configs/mapping/xbox.toml` with:
-  - Evdev-to-Xbox axis mappings (evdev code → HID axis, with invert/scale flags).
-  - Evdev-to-Xbox button mappings (evdev code → HID button bit).
-  - Deadzone configuration per axis (inner deadzone radius, default ~4000 for sticks).
-  - Axis normalization ranges (evdev range → HID range).
-- Add mapping config types in `crates/common/` (or `crates/input/`):
-  - `MappingConfig` struct parsed from TOML.
-  - Axis mapping entry: `{ evdev_code, hid_axis, invert, deadzone }`.
-  - Button mapping entry: `{ evdev_code, hid_button }`.
-- Add validation: unknown axes/buttons produce clear errors.
+- Create `configs/mapping/xbox.toml` with axis/button mappings, deadzone config.
+- Add `MappingConfig`, `AxisMapping`, `ButtonMapping` types in `crates/input/src/mapping.rs`.
+- Add validation for unknown axes/buttons.
 **Complete when:**
-- `configs/mapping/xbox.toml` exists with all MVP controls mapped.
-- Config loads and validates via `serde` + `toml`.
-- Unit tests confirm parsing of valid and invalid configs.
-- Verified through Loop 1 only.
+- Config loads and validates. 5 unit tests pass.
 
-### Step 4 — Implement input event reading and state tracking
+### Step 4 — Implement hidraw input reading and state tracking
 - [x] Done (2026-03-16)
+
+**Note:** Originally planned as evdev-based. Rewritten to use hidraw after discovering the `hid-steam` driver guards that prevent evdev event emission on the Deck.
+
 **Actions:**
-- Implement `InputReader` that:
-  - Opens discovered evdev devices (grab exclusively if needed to avoid conflicts).
-  - Reads events in a non-blocking or threaded manner.
-  - Maintains current `InputState` (all axis values + button pressed/released).
-- Apply mapping from evdev codes to Xbox HID fields using `MappingConfig`.
-- Apply deadzone processing: zero out axis values within inner deadzone, scale remaining range.
-- Apply axis normalization: convert evdev ranges (e.g., 0–65535 or -32768–32767) to HID report ranges (sticks: -32768–32767 with 0x8000 offset; triggers: 0–1023).
-- Provide `current_report() -> InputReport` method that returns the latest mapped state as an `InputReport`.
-- Ignored controls (trackpads, rear buttons, gyro) must not affect `InputReport` — filter by mapping config (unmapped codes are dropped).
+- Implement hidraw device discovery (`discover_deck_hidraw()` in `crates/input/src/hidraw.rs`):
+  - Scan `/sys/class/hidraw/`, match VID 0x28DE PID 0x1205.
+  - Select the client device (no `input/` subdirectory in sysfs).
+- Implement `HidrawDevice`:
+  - Open hidraw for read/write.
+  - Send HID feature reports to disable lizard mode (0x81 clear digital mappings + 0x87 settings).
+  - Read raw reports with poll timeout.
+- Implement `InputReader` using hidraw (in `crates/input/src/reader.rs`):
+  - Parse raw 64-byte type 0x09 reports.
+  - Extract buttons from data[8-14] bit fields.
+  - Extract axes from data[44-55] as little-endian i16 values.
+  - Negate Y axes for standard orientation.
+  - Apply deadzone and normalization from MappingConfig.
+  - Provide `current_report() -> InputReport`.
+- 16 reader unit tests (normalization, deadzone, d-pad, report parsing).
+- 4 new tests for hidraw report parsing (buttons, d-pad, axes, Y-axis negation).
 **Complete when:**
-- `InputReader` compiles and can be instantiated with a `MappingConfig`.
-- On Deck (Loop 2), reading events from physical controls produces correct `InputReport` values.
-- Unit tests verify deadzone math, axis normalization, and button mapping logic.
+- `InputReader` compiles and all 29 crate tests pass (8 discovery + 5 mapping + 16 reader).
+- On Deck, `controllerosctl input monitor` shows correct values for all MVP controls.
+
+**Validated (2026-03-16):** All controls verified on hardware:
+- Triggers: analog 0→1023
+- Buttons: A, B, X, Y, LB, RB, LS, RS, Back, Start, Home
+- D-pad: N, S, E, W cardinal directions
+- Sticks: full range ±32767 with deadzone working
+- Lizard mode: successfully disabled via HID feature reports
 
 ### Step 5 — Implement `controllerosctl input list` and `controllerosctl input monitor`
 - [x] Done (2026-03-16)
 **Actions:**
-- Add `input list` subcommand to `controllerosctl`:
-  - Calls `discover_devices()` from `crates/input/`.
-  - Prints each device: path, name, capabilities summary, whether it's selected for mapping.
-- Add `input monitor` subcommand:
-  - Opens selected devices with mapping config.
-  - Prints mapped state changes in real time (button press/release, axis value changes).
-  - Use a human-readable format: `A: pressed`, `LX: 12345`, etc.
-  - Exit on Ctrl+C.
-- Add `crates/input/` as a dependency of `crates/controllerosctl/`.
+- Add `input list` subcommand (uses evdev discovery for diagnostics).
+- Add `input monitor` subcommand (uses hidraw-based `InputReader`).
+- Add `--mapping-config` argument (default: `/etc/controlleros/mapping/xbox.toml`).
 **Complete when:**
-- `controllerosctl input list` prints discovered devices on any Linux host.
-- On Deck (Loop 2), `controllerosctl input list` shows Deck input devices with selection indicators.
-- On Deck, `controllerosctl input monitor` prints button/axis transitions when controls are physically operated.
+- `controllerosctl input list` prints discovered evdev devices with selection indicators.
+- `controllerosctl input monitor` prints button/axis transitions from hidraw.
+- 5 CLI unit tests pass.
+
+**Validated (2026-03-16):** Both commands working on Deck hardware. `input monitor` shows all MVP controls with correct values.
 
 ### Step 6 — Integrate real input into `hidd` report loop and remove UHID from production path
-- [ ] Not started
+- [x] Done (2026-03-16)
 **Actions:**
 - Add `crates/input/` as a dependency of `crates/hidd/`.
 - Modify `hidd` to accept a `--mapping-config` argument (path to `configs/mapping/xbox.toml`).
 - Replace `PatternState` usage in the main report loop:
-  - When `--mapping-config` is provided: create `InputReader`, spawn evdev reading thread, call `current_report()` each tick.
+  - When `--mapping-config` is provided: create `InputReader`, call `current_report()` each tick.
   - When `--mapping-config` is NOT provided (or `--self-test` mode): retain `PatternState` for synthetic test patterns.
 - Remove UHID from the production report loop:
   - UHID device creation and report writing should only happen in `--self-test` mode.
   - Normal BLE operation uses only GATT HOG `publish_input_report()`.
 - Ensure `--self-test` mode still works as before (UHID + synthetic pattern).
-- Update `configs/hid/hid.toml` or add a field pointing to the mapping config path, or keep it as a separate CLI arg.
 **Complete when:**
 - `hidd` with `--mapping-config` reads real Deck inputs and publishes them via BLE GATT HOG.
 - `hidd --self-test` still works with UHID + synthetic pattern (no regression).
 - UHID is not used during normal BLE operation.
 - Verified on Deck via Loop 2: physical stick/button inputs appear on connected host.
 
+**Validated (2026-03-16):** `hidd --mapping-config` reads Deck inputs via hidraw and publishes via BLE GATT HOG. Android device connected and all MVP controls working. Pattern mode (`hidd` without `--mapping-config`) still works with UHID + synthetic patterns.
+
 ### Step 7 — Documentation
-- [ ] Not started
+- [x] Done (2026-03-16)
 **Actions:**
 - Create `docs/mapping.md`:
-  - Exact mapping table: Steam Deck evdev code → Xbox HID field.
+  - Exact mapping table: Steam Deck raw HID byte offsets → Xbox HID field.
   - Deadzone and normalization parameters.
   - Which controls are ignored and why.
 - Create `docs/input_devices.md`:
-  - How evdev devices are discovered and identified on the Deck.
-  - Device names, paths, and capabilities expected.
+  - How hidraw devices are discovered and identified on the Deck.
+  - The `hid-steam` driver's device topology (4 HID sub-devices).
+  - How lizard mode is disabled via feature reports.
   - How to troubleshoot if discovery fails.
 - Update `README.md` with new commands:
   - `controllerosctl input list`
@@ -188,17 +176,18 @@ Buttons (ignore MVP): `BTN_TL2`/`BTN_TR2` (digital trigger), `BTN_MODE` (Steam l
 - README reflects new CLI commands and usage.
 
 ### Step 8 — Buildroot image integration and end-to-end validation
-- [ ] Not started
+- [x] Done (2026-03-16)
 **Actions:**
-- Update `br2-external/board/controlleros/post-build.sh` to install:
-  - `configs/mapping/xbox.toml` → `$(TARGET_DIR)/etc/controlleros/mapping/xbox.toml`.
-- Update `configs/init/S45hidd` init script to pass `--mapping-config /etc/controlleros/mapping/xbox.toml` to `hidd`.
-- Full ISO rebuild + boot on Deck (kernel changes from Step 0 included if not already rebuilt).
-- End-to-end validation:
+- [x] Update `configs/kernel/steamdeck_defconfig` to include `CONFIG_HIDRAW=y`.
+- [x] Update `br2-external/board/controlleros/post-build.sh` to install `configs/mapping/xbox.toml` → `$(TARGET_DIR)/etc/controlleros/mapping/xbox.toml`.
+- [x] Remove obsolete kernel patch (`br2-external/patches/linux/6.6.79/0001-HID-hid-steam-disable-lizard-mode-on-Deck-when-evdev.patch`).
+- [x] Update `configs/init/S45hidd` init script to pass `--mapping-config /etc/controlleros/mapping/xbox.toml` to `hidd`.
+- [x] Full ISO rebuild + boot on Deck.
+- [x] End-to-end validation:
   - Boot Deck, auto-start `hidd` with real input.
   - Pair with Linux host and Android device.
-  - Verify all MVP controls work on host (sticks, d-pad, ABXY, LB/RB, LT/RT, Start/Back).
-  - Verify ignored controls (trackpads, rear buttons) produce no host-side changes.
+  - Verify all MVP controls work on host.
+  - Verify ignored controls produce no host-side changes.
   - Run for 10+ minutes: no crashes, stable responsiveness, measure CPU usage.
 **Complete when:**
 - ISO boots and `hidd` starts with real input mapping automatically.
@@ -208,7 +197,7 @@ Buttons (ignore MVP): `BTN_TL2`/`BTN_TR2` (digital trigger), `BTN_MODE` (Steam l
 ---
 
 ## Acceptance Criteria Mapping
-- **Prerequisite** (kernel input drivers): Step 0
+- **Prerequisite** (kernel input drivers + hidraw): Step 0
 - A. Device Discovery (`controllerosctl input list`): Steps 0, 2, 5
 - B. Mapping Sanity (`controllerosctl input monitor`): Steps 3, 4, 5
 - C. Host Controller Test (sticks/buttons/triggers work on host): Steps 4, 6, 8
@@ -216,4 +205,7 @@ Buttons (ignore MVP): `BTN_TL2`/`BTN_TR2` (digital trigger), `BTN_MODE` (Steam l
 - E. Performance (10-minute stability, CPU measurement): Step 8
 
 ## Progress Updates
-Update this plan by marking steps as **Done** when complete and recording any deviations.
+- 2026-03-16: Steps 0-5 complete. Hidraw approach validated on hardware — all MVP controls working.
+- 2026-03-16: Step 8 partially done (kernel defconfig, post-build, patch removal). Remaining: hidd integration (Step 6), init script update, end-to-end validation.
+- 2026-03-16: Steps 6-7 complete. Step 8 init script updated. Remaining: full ISO rebuild + end-to-end validation.
+- 2026-03-16: Step 8 complete. ISO boots, hidd auto-starts with real input, controller usable without login. All MVP controls verified on Android host. Also fixed: added RTL 87xx BT firmware for rtl8822cu_config.bin, added bluetoothd startup delay to prevent bluetoothctl segfault.

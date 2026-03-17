@@ -5,6 +5,7 @@ DAEMON_PATH="/usr/bin/hidd"
 PIDFILE="/var/run/$DAEMON.pid"
 LOGFILE="/var/log/$DAEMON.log"
 CONFIG="/etc/controlleros/hid.toml"
+MAPPING_CONFIG="/etc/controlleros/mapping/xbox.toml"
 
 start() {
 	printf 'Starting %s: ' "$DAEMON"
@@ -32,7 +33,7 @@ start() {
 	fi
 	start-stop-daemon --start --background --make-pidfile \
 		--pidfile "$PIDFILE" \
-		--startas /bin/sh -- -c "exec $DAEMON_PATH --config $CONFIG >>$LOGFILE 2>&1"
+		--startas /bin/sh -- -c "exec $DAEMON_PATH --config $CONFIG --mapping-config $MAPPING_CONFIG >>$LOGFILE 2>&1"
 	status=$?
 	if [ "$status" -eq 0 ]; then
 		echo "OK"

@@ -19,6 +19,10 @@ run_btctl() {
 	fi
 }
 
+# Give bluetoothd time to register its D-Bus interface after background start.
+# Without this, bluetoothctl can segfault on a NULL D-Bus proxy.
+sleep 2
+
 for _ in 1 2 3 4 5; do
 	if run_btctl show >/dev/null 2>&1; then
 		if run_btctl power on >/dev/null 2>&1; then

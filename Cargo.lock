@@ -114,6 +114,7 @@ dependencies = [
  "common",
  "dbus",
  "dbus-crossroads",
+ "input",
 ]
 
 [[package]]

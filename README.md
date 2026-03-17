@@ -189,9 +189,40 @@ Expected success output includes:
 Profile details:
 - `docs/hid_profile.md`
 
+## Input mapping (checkpoint 04)
+
+The Steam Deck's physical controls are read via hidraw and mapped to Xbox One S-style HID reports transmitted over BLE.
+
+### CLI commands
+
+List detected input devices (evdev-based diagnostics):
+```bash
+controllerosctl input list
+```
+
+Monitor live controller input from hidraw (mapped values):
+```bash
+controllerosctl input monitor --mapping-config /etc/controlleros/mapping/xbox.toml
+```
+
+### hidd with real input
+
+Start `hidd` with real Deck input (production mode):
+```bash
+hidd --config /etc/controlleros/hid.toml --mapping-config /etc/controlleros/mapping/xbox.toml
+```
+
+Without `--mapping-config`, `hidd` runs in pattern mode (synthetic test patterns via UHID + BLE).
+
+### Documentation
+
+- `docs/mapping.md` — exact byte-level mapping table, normalization, ignored controls
+- `docs/input_devices.md` — hidraw discovery, hid-steam topology, lizard mode, troubleshooting
+
 ## Buildroot image integration (checkpoint 03 step 6)
 
 `./scripts/build.sh` now installs these artifacts into the image:
 - `/usr/bin/hidd`
 - `/usr/bin/controllerosctl`
 - `/etc/controlleros/hid.toml`
+- `/etc/controlleros/mapping/xbox.toml`
