@@ -5,14 +5,28 @@ set -eu
 OUT_DIR="out/dev-payload"
 HIDD_BIN=""
 CTL_BIN=""
+GUI_BIN=""
 HID_CONFIG=""
+MAPPING_CONFIG=""
+
+# Default paths (relative to repo root)
+DEFAULT_HIDD="target/release/hidd"
+DEFAULT_CTL="target/release/controllerosctl"
+DEFAULT_GUI="target/release/controlleros-gui"
+DEFAULT_HID_CONFIG="configs/hid/hid.toml"
+DEFAULT_MAPPING_CONFIG="configs/mapping/xbox.toml"
 
 usage() {
-	echo "Usage: $0 --hidd <path> --controllerosctl <path> [options]"
+	echo "Usage: $0 [options]"
+	echo "At least one binary (--hidd, --controllerosctl, or --gui) is required."
+	echo "Flags accept an optional path; if omitted, the default is used."
+	echo ""
 	echo "Options:"
-	echo "  --hidd <path>             Path to hidd binary"
-	echo "  --controllerosctl <path>  Path to controllerosctl binary"
-	echo "  --hid-config <path>       Optional hid.toml path"
+	echo "  --hidd [path]             Path to hidd binary (default: $DEFAULT_HIDD)"
+	echo "  --controllerosctl [path]  Path to controllerosctl binary (default: $DEFAULT_CTL)"
+	echo "  --gui [path]              Path to controlleros-gui binary (default: $DEFAULT_GUI)"
+	echo "  --hid-config [path]       hid.toml config (default: $DEFAULT_HID_CONFIG)"
+	echo "  --mapping-config [path]   xbox.toml mapping config (default: $DEFAULT_MAPPING_CONFIG)"
 	echo "  --out-dir <path>          Output directory (default: out/dev-payload)"
 	echo "  -h, --help                Show help"
 }
@@ -36,34 +50,62 @@ copy_item() {
 	printf '%s %s %s\n' "$MODE" "$SHA" "$REL" >> "$OUT_DIR/manifest.txt"
 }
 
+# Check if a value looks like a flag (starts with -) or is missing.
+# Returns 0 (true) if the next arg is a usable path value.
+has_value() {
+	[ "$#" -ge 2 ] || return 1
+	case "$2" in
+		-*) return 1 ;;
+	esac
+	return 0
+}
+
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--hidd)
-			[ "$#" -ge 2 ] || {
-				echo "error: --hidd requires a value" >&2
-				usage >&2
-				exit 1
-			}
-			HIDD_BIN="$2"
-			shift 2
+			if has_value "$@"; then
+				HIDD_BIN="$2"
+				shift 2
+			else
+				HIDD_BIN="$DEFAULT_HIDD"
+				shift
+			fi
 			;;
 		--controllerosctl)
-			[ "$#" -ge 2 ] || {
-				echo "error: --controllerosctl requires a value" >&2
-				usage >&2
-				exit 1
-			}
-			CTL_BIN="$2"
-			shift 2
+			if has_value "$@"; then
+				CTL_BIN="$2"
+				shift 2
+			else
+				CTL_BIN="$DEFAULT_CTL"
+				shift
+			fi
+			;;
+		--gui)
+			if has_value "$@"; then
+				GUI_BIN="$2"
+				shift 2
+			else
+				GUI_BIN="$DEFAULT_GUI"
+				shift
+			fi
 			;;
 		--hid-config)
-			[ "$#" -ge 2 ] || {
-				echo "error: --hid-config requires a value" >&2
-				usage >&2
-				exit 1
-			}
-			HID_CONFIG="$2"
-			shift 2
+			if has_value "$@"; then
+				HID_CONFIG="$2"
+				shift 2
+			else
+				HID_CONFIG="$DEFAULT_HID_CONFIG"
+				shift
+			fi
+			;;
+		--mapping-config)
+			if has_value "$@"; then
+				MAPPING_CONFIG="$2"
+				shift 2
+			else
+				MAPPING_CONFIG="$DEFAULT_MAPPING_CONFIG"
+				shift
+			fi
 			;;
 		--out-dir)
 			[ "$#" -ge 2 ] || {
@@ -86,26 +128,49 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 
-[ -n "$HIDD_BIN" ] || {
-	echo "error: --hidd is required" >&2
+if [ -z "$HIDD_BIN" ] && [ -z "$CTL_BIN" ] && [ -z "$GUI_BIN" ]; then
+	echo "error: at least one of --hidd, --controllerosctl, or --gui is required" >&2
 	usage >&2
 	exit 1
-}
-[ -n "$CTL_BIN" ] || {
-	echo "error: --controllerosctl is required" >&2
-	usage >&2
-	exit 1
-}
+fi
 
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 : > "$OUT_DIR/manifest.txt"
 
-copy_item "$HIDD_BIN" "bin/hidd" "0755"
-copy_item "$CTL_BIN" "bin/controllerosctl" "0755"
+if [ -n "$HIDD_BIN" ]; then
+	copy_item "$HIDD_BIN" "bin/hidd" "0755"
+fi
+
+if [ -n "$CTL_BIN" ]; then
+	copy_item "$CTL_BIN" "bin/controllerosctl" "0755"
+fi
+
+if [ -n "$GUI_BIN" ]; then
+	copy_item "$GUI_BIN" "bin/controlleros-gui" "0755"
+fi
 
 if [ -n "$HID_CONFIG" ]; then
 	copy_item "$HID_CONFIG" "configs/hid/hid.toml" "0644"
+fi
+
+if [ -n "$MAPPING_CONFIG" ]; then
+	copy_item "$MAPPING_CONFIG" "configs/mapping/xbox.toml" "0644"
+fi
+
+# Copy test scripts into payload root so controlleros-dev-run --shell-script can fetch them.
+TESTS_DIR="$(cd "$(dirname "$0")" && pwd)/tests"
+if [ -d "$TESTS_DIR" ]; then
+	TEST_COUNT=0
+	for f in "$TESTS_DIR"/*.sh; do
+		[ -f "$f" ] || continue
+		cp -f "$f" "$OUT_DIR/$(basename "$f")"
+		chmod 0755 "$OUT_DIR/$(basename "$f")"
+		TEST_COUNT=$((TEST_COUNT + 1))
+	done
+	if [ "$TEST_COUNT" -gt 0 ]; then
+		echo "Copied $TEST_COUNT test script(s) from $TESTS_DIR"
+	fi
 fi
 
 echo "Payload staged at: $OUT_DIR"

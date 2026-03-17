@@ -1,7 +1,7 @@
 # Instructions for AI tool execution (Codex-oriented)
 
 ## Primary objective
-Work strictly through the checkpoint files in `checkpoints/` in order (01 → 05), implementing only what is required to satisfy each checkpoint’s acceptance criteria.
+Work strictly through the checkpoint files in `checkpoints/` in order (01 → 06), implementing only what is required to satisfy each checkpoint’s acceptance criteria.
 
 ---
 

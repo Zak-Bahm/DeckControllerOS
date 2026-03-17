@@ -3,17 +3,40 @@
 set -eu
 
 BASE_URL=""
-TARGET_ROOT="/var/lib/controlleros/dev"
+TARGET_ROOT=""
+TARGET_ROOT_SET=0
 MANIFEST_NAME="manifest.txt"
 RESTART_CMD=""
 DRY_RUN=0
 
+# Map manifest relative paths to system install locations.
+# Used when --target-root is not specified.
+resolve_system_path() {
+	REL="$1"
+	case "$REL" in
+		bin/hidd)                    echo "/usr/bin/hidd" ;;
+		bin/controllerosctl)         echo "/usr/bin/controllerosctl" ;;
+		bin/controlleros-gui)        echo "/usr/bin/controlleros-gui" ;;
+		configs/hid/hid.toml)        echo "/etc/controlleros/hid.toml" ;;
+		configs/mapping/xbox.toml)   echo "/etc/controlleros/mapping/xbox.toml" ;;
+		*)                           echo "" ;;
+	esac
+}
+
 usage() {
 	echo "Usage: $0 --base-url <http://host:port> [options]"
+	echo ""
+	echo "Without --target-root, files are installed to their system locations:"
+	echo "  bin/hidd                  -> /usr/bin/hidd"
+	echo "  bin/controllerosctl      -> /usr/bin/controllerosctl"
+	echo "  bin/controlleros-gui     -> /usr/bin/controlleros-gui"
+	echo "  configs/hid/hid.toml     -> /etc/controlleros/hid.toml"
+	echo "  configs/mapping/xbox.toml -> /etc/controlleros/mapping/xbox.toml"
+	echo ""
 	echo "Options:"
 	echo "  --base-url <url>       Base URL that serves manifest + payload files (required)"
-	echo "  --target-root <path>   Install root on Deck (default: /var/lib/controlleros/dev)"
-	echo "  --manifest <name>      Manifest filename (default: manifest.txt)"
+	echo "  --target-root <path>   Install root on Deck (files placed under <path>/<rel>)"
+	echo "  --manifest [name]      Manifest filename (default: manifest.txt)"
 	echo "  --restart-cmd <cmd>    Command to run after successful update"
 	echo "  --dry-run              Validate downloads/hashes without installing"
 	echo "  -h, --help             Show help"
@@ -58,16 +81,16 @@ while [ "$#" -gt 0 ]; do
 				exit 1
 			}
 			TARGET_ROOT="$2"
+			TARGET_ROOT_SET=1
 			shift 2
 			;;
 		--manifest)
-			[ "$#" -ge 2 ] || {
-				echo "error: --manifest requires a value" >&2
-				usage >&2
-				exit 1
-			}
-			MANIFEST_NAME="$2"
-			shift 2
+			if [ "$#" -ge 2 ] && case "$2" in -*) false ;; *) true ;; esac; then
+				MANIFEST_NAME="$2"
+				shift 2
+			else
+				shift
+			fi
 			;;
 		--restart-cmd)
 			[ "$#" -ge 2 ] || {
@@ -124,10 +147,6 @@ echo "Fetching manifest: $MANIFEST_URL"
 if ! wget -q -O "$MANIFEST_PATH" "$MANIFEST_URL"; then
 	echo "error: failed to fetch manifest from $MANIFEST_URL" >&2
 	exit 1
-fi
-
-if [ "$DRY_RUN" -eq 0 ]; then
-	mkdir -p "$TARGET_ROOT"
 fi
 
 UPDATED=0
@@ -190,7 +209,17 @@ while IFS=' ' read -r MODE SHA REL_PATH REST; do
 		continue
 	fi
 
-	DEST_PATH="$TARGET_ROOT/$REL_PATH"
+	# Determine destination path
+	if [ "$TARGET_ROOT_SET" -eq 1 ]; then
+		DEST_PATH="$TARGET_ROOT/$REL_PATH"
+	else
+		DEST_PATH="$(resolve_system_path "$REL_PATH")"
+		if [ -z "$DEST_PATH" ]; then
+			echo "warning: no system path mapping for $REL_PATH, skipping" >&2
+			continue
+		fi
+	fi
+
 	DEST_DIR="$(dirname "$DEST_PATH")"
 	TMP_DEST="$DEST_PATH.new.$$"
 

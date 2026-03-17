@@ -72,7 +72,7 @@ The repo should be structured so an AI tool can begin work immediately:
 
 - `project.md` (this file)
 - `instructions.md` (AI execution guardrails)
-- `checkpoints/` (the 5 checkpoint files)
+- `checkpoints/` (the 6 checkpoint files)
 - `docs/` (installation, pairing, mapping, storage, boot)
 - `scripts/` (build, release, helper scripts)
 - `src/` (Rust code; daemons + shared crates)
