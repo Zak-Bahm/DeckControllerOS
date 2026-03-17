@@ -148,6 +148,7 @@ if [ -n "$SHELL_SCRIPT" ]; then
 	# Clean up the downloaded script on exit (append to existing trap later)
 fi
 
+export CONTROLLEROS_DEV_BASE_URL="$BASE_URL"
 POST_URL="$BASE_URL$ENDPOINT"
 HOSTNAME="$(hostname 2>/dev/null || echo deck)"
 TIMESTAMP_UTC="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)"

@@ -71,7 +71,7 @@
 
 ## Plan (incremental)
 
-### Step 0 — Kernel config: enable AMD GPU and touchscreen drivers
+### Step 0 — Kernel config: enable AMD GPU and touchscreen drivers ✅ COMPLETE
 **Requires:** Full ISO rebuild + reboot.
 
 **Actions:**
@@ -107,7 +107,7 @@ controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test
 - Test script exits 0 (all PASS).
 - Manual touch tap produces input events.
 
-### Step 1 — Buildroot packages: mesa3d, libinput, libxkbcommon
+### Step 1 — Buildroot packages: mesa3d, libinput, libxkbcommon ✅ COMPLETE
 **Requires:** Full ISO rebuild + reboot.
 
 **Actions:**

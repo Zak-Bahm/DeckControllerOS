@@ -20,7 +20,13 @@ class DevRequestHandler(SimpleHTTPRequestHandler):
     logs_dir: Path
     log_endpoint: str
 
+    send_instruction_endpoint = "/send-instruction"
+
     def do_POST(self) -> None:  # noqa: N802 (base class API)
+        if self.path == self.send_instruction_endpoint:
+            self._handle_send_instruction()
+            return
+
         if self.path != self.log_endpoint:
             self.send_error(404, "Unknown endpoint")
             return
@@ -88,6 +94,25 @@ class DevRequestHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
         self.wfile.write(f"stored {out_path.name}\n".encode("utf-8"))
+
+    def _handle_send_instruction(self) -> None:
+        content_length = self.headers.get("Content-Length")
+        body = ""
+        if content_length:
+            try:
+                n_bytes = int(content_length)
+                body = self.rfile.read(n_bytes).decode("utf-8", errors="replace").strip()
+            except (ValueError, UnicodeDecodeError):
+                pass
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        remote_ip = self.client_address[0] if self.client_address else "unknown"
+        print(f"[{timestamp}] INSTRUCTION {remote_ip}: {body}")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"ok\n")
 
     def log_message(self, fmt: str, *args: object) -> None:
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
