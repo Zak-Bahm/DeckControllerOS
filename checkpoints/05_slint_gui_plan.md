@@ -36,8 +36,7 @@
 
 ### Cargo features
 - **Backend:** `backend-linuxkms-noseat` — DRM/KMS + libinput, no libseat required (safe because ControllerOS runs as root with direct `/dev/dri/*` and `/dev/input/*` access).
-- **Renderer:** `renderer-skia-opengl` — Skia with OpenGL ES via EGL. Chosen because Buildroot 2025.11 does NOT include the RADV AMD Vulkan driver, ruling out `renderer-skia-vulkan`. The radeonsi Gallium driver in mesa3d provides OpenGL support for the Deck's Van Gogh APU (RDNA2).
-- **Fallback renderer:** `renderer-femtovg` is a lighter alternative if Skia + OpenGL proves problematic. `renderer-software` (DRM dumb buffers, no GPU) is a last resort but lacks mouse cursor rendering and has limited text quality.
+- **Renderer:** `renderer-femtovg` — GPU-accelerated 2D vector renderer using OpenGL ES via EGL. Chosen over `renderer-skia-opengl` because Skia's C++ build script causes host/target linker conflicts in Buildroot's cross-compilation environment (glibc linker scripts with absolute paths, pkg-config host/target confusion). FemtoVG is pure Rust, avoids all native build script issues, and is well-suited for the simple UI workload.
 - Use `default-features = false` to avoid pulling in the default winit/femtovg/software stack.
 
 ### System library dependencies (resolved via pkg-config)
@@ -52,7 +51,7 @@
 
 ### Buildroot packages to enable
 - `BR2_PACKAGE_MESA3D=y` with `BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_RADEONSI=y` (auto-selects `libdrm`, `libdrm-amdgpu`, `llvm-amdgpu`)
-- `BR2_PACKAGE_MESA3D_OPENGL_EGL=y` and `BR2_PACKAGE_MESA3D_OPENGL_ES=y` (EGL + GLES for Skia)
+- `BR2_PACKAGE_MESA3D_OPENGL_EGL=y` and `BR2_PACKAGE_MESA3D_OPENGL_ES=y` (EGL + GLES for FemtoVG)
 - `BR2_PACKAGE_LIBINPUT=y`
 - `BR2_PACKAGE_LIBXKBCOMMON=y`
 
@@ -67,7 +66,7 @@
 - `crates/gui/` is a new binary crate that needs its own Buildroot package `.mk` file (`br2-external/package/controlleros-gui/`), following the same pattern as `controlleros-hidd.mk`.
 - The existing vendoring hooks will vendor Slint, zbus, and all transitive dependencies automatically.
 - New crate dependencies must be version-pinned (exact `=x.y.z`) and present in `Cargo.lock` before Buildroot build.
-- Slint pulls in a significant dependency tree (Skia build may need special handling for cross-compilation — investigate whether Slint's bundled Skia builds cleanly with Buildroot's toolchain or if pre-built Skia binaries are needed).
+- Slint with `renderer-femtovg` has a pure-Rust dependency tree with no native C/C++ build scripts, making it compatible with Buildroot's cargo-package cross-compilation infrastructure without workarounds.
 
 ## Plan (incremental)
 
@@ -140,7 +139,7 @@ controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test
 **Complete when:**
 - Test script exits 0 (all PASS).
 
-### Step 2 — Create `crates/gui/` crate skeleton and workspace integration
+### Step 2 — Create `crates/gui/` crate skeleton and workspace integration ✅ COMPLETE
 **Requires:** Loop 1 (host-only). No Deck testing yet.
 
 **Actions:**
@@ -151,7 +150,7 @@ controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test
   [dependencies]
   slint = { version = "=1.15.0", default-features = false, features = [
       "backend-linuxkms-noseat",
-      "renderer-skia-opengl",
+      "renderer-femtovg",
       "compat-1-2",
   ] }
   zbus = { version = "=5.5.0", default-features = false, features = ["tokio"] }
@@ -177,7 +176,7 @@ cargo check --workspace
 **Complete when:**
 - `cargo check --workspace` passes with the new crate and all dependencies resolve.
 
-### Step 3 — First render on Deck: placeholder GUI via DRM/KMS
+### Step 3 — First render on Deck: placeholder GUI via DRM/KMS ✅ COMPLETE
 **Requires:** Full rebuild (new Buildroot package `.mk`) + Loop 2 for subsequent iterations.
 
 This is the critical integration milestone — get *anything* rendering on the Deck's screen via Slint + LinuxKMS.
@@ -192,7 +191,7 @@ This is the critical integration milestone — get *anything* rendering on the D
 - Enable `BR2_PACKAGE_CONTROLLEROS_GUI=y` in defconfig.
 - Update `scripts/dev_stage_payload.sh` to support `--gui <path>` argument.
 - Build the image or cross-compile the binary and stage via Loop 2.
-- Investigate Skia cross-compilation: Slint bundles Skia source and builds it via `skia-safe` crate. Verify this works with Buildroot's x86_64 toolchain. If not, fall back to `renderer-femtovg` which has lighter build requirements.
+- Using `renderer-femtovg` (pure Rust, no native build scripts) — no special cross-compilation handling needed.
 
 **Test script: `scripts/tests/test_gui_step3_render.sh`**
 
@@ -221,7 +220,7 @@ controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --timeout-seconds 3
 **Complete when:**
 - Test script exits 0 (all PASS).
 - Manual visual verification confirms rendering and touch.
-- Renderer (Skia OpenGL or fallback) confirmed working on Deck hardware.
+- FemtoVG renderer confirmed working on Deck hardware.
 
 ### Step 4 — Full Slint UI layout with std-widgets
 **Requires:** Loop 1 for layout iteration, then Loop 2 for Deck validation.
@@ -444,7 +443,7 @@ controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test
 
 **Actions:**
 - Create `docs/gui.md`:
-  - Architecture: Slint + LinuxKMS-noseat backend, Skia OpenGL renderer (or whichever renderer was confirmed in Step 3), BlueZ D-Bus integration via zbus, system command execution.
+  - Architecture: Slint + LinuxKMS-noseat backend, FemtoVG OpenGL renderer, BlueZ D-Bus integration via zbus, system command execution.
   - Slint UI structure: `std-widgets.slint` components used, callback/model bindings.
   - Touchscreen setup: kernel drivers, libinput integration, rotation/calibration details.
   - Framebuffer/DRM backend: how Slint renders via DRM/KMS on the Deck's AMD GPU (radeonsi + EGL).

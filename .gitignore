@@ -4,3 +4,4 @@ out/
 *.img
 target/
 __pycache__/
+VENDOR/

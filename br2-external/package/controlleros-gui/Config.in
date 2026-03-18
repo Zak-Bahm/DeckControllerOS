@@ -1,0 +1,9 @@
+config BR2_PACKAGE_CONTROLLEROS_GUI
+	bool "controlleros-gui"
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+	select BR2_PACKAGE_HOST_RUSTC
+	select BR2_PACKAGE_MESA3D
+	select BR2_PACKAGE_LIBINPUT
+	select BR2_PACKAGE_LIBXKBCOMMON
+	help
+	  ControllerOS touchscreen GUI for Bluetooth device management.

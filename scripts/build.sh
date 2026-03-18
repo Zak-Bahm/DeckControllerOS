@@ -15,32 +15,14 @@ make -C "$BUILDROOT_DIR" \
   BR2_EXTERNAL="$BR2_EXTERNAL_DIR" \
   BR2_DEFCONFIG="$DEFCONFIG" defconfig
 
-CURRENT_HASH="$(sha256sum "$OUT_DIR/.config" | awk '{print $1}')"
-PREVIOUS_HASH=""
-if [ -f "$CONFIG_HASH_FILE" ]; then
-  PREVIOUS_HASH="$(cat "$CONFIG_HASH_FILE")"
-fi
-
-NEEDS_CLEAN_REBUILD=0
-if [ -z "$PREVIOUS_HASH" ] && [ -d "$OUT_DIR/build" ]; then
-  NEEDS_CLEAN_REBUILD=1
-elif [ -n "$PREVIOUS_HASH" ] && [ "$PREVIOUS_HASH" != "$CURRENT_HASH" ]; then
-  NEEDS_CLEAN_REBUILD=1
-fi
-
-if [ "$NEEDS_CLEAN_REBUILD" -eq 1 ]; then
-  echo "Buildroot config changed; running clean rebuild to avoid stale package configuration"
-  make -C "$BUILDROOT_DIR" \
-    O="$OUT_DIR" \
-    BR2_EXTERNAL="$BR2_EXTERNAL_DIR" clean
-  make -C "$BUILDROOT_DIR" \
-    O="$OUT_DIR" \
-    BR2_EXTERNAL="$BR2_EXTERNAL_DIR" \
-    BR2_DEFCONFIG="$DEFCONFIG" defconfig
-  CURRENT_HASH="$(sha256sum "$OUT_DIR/.config" | awk '{print $1}')"
-fi
-
-echo "$CURRENT_HASH" > "$CONFIG_HASH_FILE"
+# Invalidate rsync stamps for local Rust crates so Buildroot re-syncs
+# source changes (Cargo.lock, code edits) instead of building stale copies.
+for pkg in controlleros-hidd controllerosctl controlleros-gui; do
+  stamp="$OUT_DIR/build/${pkg}-0.1.0/.stamp_rsynced"
+  if [ -f "$stamp" ]; then
+    rm -f "$stamp"
+  fi
+done
 
 make -C "$BUILDROOT_DIR" \
   O="$OUT_DIR" \

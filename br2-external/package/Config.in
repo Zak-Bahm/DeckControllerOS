@@ -1,2 +1,3 @@
 source "$BR2_EXTERNAL_CONTROLLEROS_PATH/package/controlleros-hidd/Config.in"
 source "$BR2_EXTERNAL_CONTROLLEROS_PATH/package/controllerosctl/Config.in"
+source "$BR2_EXTERNAL_CONTROLLEROS_PATH/package/controlleros-gui/Config.in"

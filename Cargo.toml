@@ -4,5 +4,6 @@ members = [
   "crates/input",
   "crates/hidd",
   "crates/controllerosctl",
+  "crates/gui",
 ]
 resolver = "2"

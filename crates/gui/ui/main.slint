@@ -1,0 +1,23 @@
+import { VerticalBox, Button } from "std-widgets.slint";
+
+export component MainWindow inherits Window {
+    title: "ControllerOS";
+    preferred-width: 1280px;
+    preferred-height: 800px;
+    background: black;
+
+    VerticalBox {
+        alignment: center;
+
+        Text {
+            text: "ControllerOS";
+            font-size: 32px;
+            horizontal-alignment: center;
+            color: white;
+        }
+
+        Button {
+            text: "Hello from Slint";
+        }
+    }
+}
