@@ -1,4 +1,11 @@
-import { VerticalBox, Button } from "std-widgets.slint";
+import { Button, ListView, GroupBox, VerticalBox, HorizontalBox, Spinner } from "std-widgets.slint";
+
+export struct BtDeviceModel {
+    name: string,
+    address: string,
+    connected: bool,
+    obj-path: string,
+}
 
 export component MainWindow inherits Window {
     title: "ControllerOS";
@@ -6,18 +13,211 @@ export component MainWindow inherits Window {
     preferred-height: 800px;
     background: black;
 
-    VerticalBox {
-        alignment: center;
+    in-out property <[BtDeviceModel]> devices: [
+        { name: "Xbox Controller", address: "AA:BB:CC:DD:EE:01", connected: true, obj-path: "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_01" },
+        { name: "DualSense", address: "AA:BB:CC:DD:EE:02", connected: false, obj-path: "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_02" },
+        { name: "Pro Controller", address: "AA:BB:CC:DD:EE:03", connected: true, obj-path: "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_03" },
+    ];
 
+    in-out property <bool> confirm-visible: false;
+    in-out property <string> confirm-message: "";
+    in-out property <string> pending-action: "";
+    in-out property <int> pending-index: -1;
+
+    in-out property <string> status-text: "";
+    in-out property <bool> busy: false;
+
+    callback disconnect(int);
+    callback reconnect(int);
+    callback forget(int);
+    callback restart-stack();
+    callback restart();
+    callback power-off();
+    callback confirm-action();
+    callback cancel-action();
+
+    cancel-action => {
+        confirm-visible = false;
+        confirm-message = "";
+        pending-action = "";
+        pending-index = -1;
+    }
+
+    VerticalBox {
+        padding: 16px;
+        spacing: 12px;
+
+        // Header
         Text {
-            text: "ControllerOS";
-            font-size: 32px;
-            horizontal-alignment: center;
+            text: "ControllerOS — Bluetooth Devices";
+            font-size: 24px;
             color: white;
+            horizontal-alignment: center;
         }
 
-        Button {
-            text: "Hello from Slint";
+        // Device list
+        ListView {
+            vertical-stretch: 1;
+
+            for device[index] in root.devices : Rectangle {
+                height: 64px;
+                background: Math.mod(index, 2) == 0 ? #1a1a1a : #222222;
+                border-radius: 4px;
+
+                HorizontalBox {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    alignment: center;
+
+                    Text {
+                        text: device.name;
+                        color: white;
+                        font-size: 18px;
+                        horizontal-stretch: 2;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: device.address;
+                        color: #888888;
+                        font-size: 14px;
+                        horizontal-stretch: 2;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: device.connected ? "● Connected" : "○ Disconnected";
+                        color: device.connected ? #44cc44 : #cc4444;
+                        font-size: 14px;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+
+                    Button {
+                        text: device.connected ? "Disconnect" : "Reconnect";
+                        clicked => {
+                            if device.connected {
+                                root.disconnect(index);
+                            } else {
+                                root.reconnect(index);
+                            }
+                        }
+                    }
+
+                    Button {
+                        text: "Forget";
+                        clicked => {
+                            root.confirm-message = "Forget " + device.name + "?";
+                            root.pending-action = "forget";
+                            root.pending-index = index;
+                            root.confirm-visible = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Status bar
+        HorizontalBox {
+            alignment: center;
+            height: 32px;
+
+            if root.busy : Spinner {
+                indeterminate: true;
+                width: 24px;
+                height: 24px;
+            }
+
+            Text {
+                text: root.status-text;
+                color: #aaaaaa;
+                font-size: 14px;
+                vertical-alignment: center;
+            }
+        }
+
+        // System buttons
+        HorizontalBox {
+            alignment: center;
+            spacing: 16px;
+            height: 56px;
+
+            Button {
+                text: "Restart Stack";
+                clicked => {
+                    root.confirm-message = "Restart Bluetooth stack?";
+                    root.pending-action = "restart-stack";
+                    root.pending-index = -1;
+                    root.confirm-visible = true;
+                }
+            }
+
+            Button {
+                text: "Restart";
+                clicked => {
+                    root.confirm-message = "Restart the system?";
+                    root.pending-action = "restart";
+                    root.pending-index = -1;
+                    root.confirm-visible = true;
+                }
+            }
+
+            Button {
+                text: "Power Off";
+                clicked => {
+                    root.confirm-message = "Power off the system?";
+                    root.pending-action = "power-off";
+                    root.pending-index = -1;
+                    root.confirm-visible = true;
+                }
+            }
+        }
+    }
+
+    // Confirmation dialog overlay
+    if root.confirm-visible : Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000aa;
+
+        Rectangle {
+            width: 400px;
+            height: 180px;
+            background: #333333;
+            border-radius: 8px;
+
+            VerticalBox {
+                alignment: center;
+                padding: 24px;
+                spacing: 16px;
+
+                Text {
+                    text: root.confirm-message;
+                    color: white;
+                    font-size: 20px;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                HorizontalBox {
+                    alignment: center;
+                    spacing: 24px;
+
+                    Button {
+                        text: "Confirm";
+                        clicked => {
+                            root.confirm-action();
+                        }
+                    }
+
+                    Button {
+                        text: "Cancel";
+                        clicked => {
+                            root.cancel-action();
+                        }
+                    }
+                }
+            }
         }
     }
 }

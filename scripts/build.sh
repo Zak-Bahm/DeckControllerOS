@@ -15,12 +15,18 @@ make -C "$BUILDROOT_DIR" \
   BR2_EXTERNAL="$BR2_EXTERNAL_DIR" \
   BR2_DEFCONFIG="$DEFCONFIG" defconfig
 
-# Invalidate rsync stamps for local Rust crates so Buildroot re-syncs
-# source changes (Cargo.lock, code edits) instead of building stale copies.
+# Force rebuild of local Rust crates. Buildroot stamps are existence-based,
+# not timestamp-based — a newer .stamp_rsynced does NOT trigger a rebuild
+# if .stamp_built already exists. We remove .stamp_rsynced to force re-sync,
+# then use Buildroot's <pkg>-rebuild target to clear build/install stamps.
 for pkg in controlleros-hidd controllerosctl controlleros-gui; do
   stamp="$OUT_DIR/build/${pkg}-0.1.0/.stamp_rsynced"
   if [ -f "$stamp" ]; then
     rm -f "$stamp"
+    make -C "$BUILDROOT_DIR" \
+      O="$OUT_DIR" \
+      BR2_EXTERNAL="$BR2_EXTERNAL_DIR" \
+      "${pkg}-rebuild"
   fi
 done
 
