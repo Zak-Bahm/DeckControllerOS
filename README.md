@@ -226,3 +226,5 @@ Without `--mapping-config`, `hidd` runs in pattern mode (synthetic test patterns
 - `/usr/bin/controllerosctl`
 - `/etc/controlleros/hid.toml`
 - `/etc/controlleros/mapping/xbox.toml`
+
+All icons used are sourced from [GOFOX](https://www.flaticon.com/authors/gofox)

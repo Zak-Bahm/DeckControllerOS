@@ -7,14 +7,18 @@ edition = "2021"
 name = "controlleros-gui"
 path = "src/main.rs"
 
+[features]
+default = ["deck"]
+deck = ["slint/backend-linuxkms-noseat", "dep:zbus", "dep:tokio"]
+desktop = ["slint/backend-winit"]
+
 [dependencies]
 slint = { version = "=1.15.0", default-features = false, features = [
-    "backend-linuxkms-noseat",
     "renderer-femtovg",
     "compat-1-2",
 ] }
-zbus = { version = "=5.14.0", default-features = false, features = ["tokio"] }
-tokio = { version = "=1.44.1", features = ["rt", "macros", "process", "time"] }
+zbus = { version = "=5.14.0", default-features = false, features = ["tokio"], optional = true }
+tokio = { version = "=1.44.1", features = ["rt", "macros", "process", "time"], optional = true }
 anyhow = "=1.0.100"
 tracing = "=0.1.41"
 tracing-subscriber = "=0.3.19"
