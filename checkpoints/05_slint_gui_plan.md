@@ -222,7 +222,7 @@ controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --timeout-seconds 3
 - Manual visual verification confirms rendering and touch.
 - FemtoVG renderer confirmed working on Deck hardware.
 
-### Step 4 — Full Slint UI layout with std-widgets
+### Step 4 — Full Slint UI layout with std-widgets ✅ COMPLETE
 **Requires:** Loop 1 for layout iteration, then Loop 2 for Deck validation.
 
 **Actions:**
@@ -266,7 +266,7 @@ controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --timeout-seconds 3
 - Test script exits 0 (all PASS).
 - Manual verification confirms layout, button taps, confirmation dialog, and scrolling.
 
-### Step 5 — BlueZ D-Bus client module
+### Step 5 — BlueZ D-Bus client module ✅ COMPLETE
 **Requires:** Loop 1 for code, then Loop 2 for Deck validation.
 
 **Actions:**
@@ -305,7 +305,7 @@ controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test
 - Test script exits 0 (all PASS).
 - `--list-devices` output matches `bluetoothctl` data for all paired devices.
 
-### Step 6 — Wire BlueZ backend to Slint UI
+### Step 6 — Wire BlueZ backend to Slint UI ✅ COMPLETE
 **Requires:** Loop 2 for Deck validation.
 
 **Actions:**

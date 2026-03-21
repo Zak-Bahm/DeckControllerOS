@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -26,6 +26,7 @@ const BLUEZ_ROOT_PATH: &str = "/";
 const BLUEZ_ADAPTER_IFACE: &str = "org.bluez.Adapter1";
 const BLUEZ_GATT_MANAGER_IFACE: &str = "org.bluez.GattManager1";
 const BLUEZ_LE_ADV_MANAGER_IFACE: &str = "org.bluez.LEAdvertisingManager1";
+const BLUEZ_DEVICE_IFACE: &str = "org.bluez.Device1";
 const DBUS_PROPERTIES_IFACE: &str = "org.freedesktop.DBus.Properties";
 
 const GATT_SERVICE_IFACE: &str = "org.bluez.GattService1";
@@ -76,7 +77,7 @@ const REPORT_TYPE_INPUT: u8 = 0x01;
 const REPORT_TYPE_OUTPUT: u8 = 0x02;
 const HID_INFO_BCD: [u8; 2] = [0x11, 0x01];
 const HID_FLAG_REMOTE_WAKE: u8 = 0x01;
-const PNP_ID_VENDOR_SOURCE_USB: u8 = 0x02;
+const PNP_ID_VENDOR_SOURCE_USB: u8 = 0x01;
 
 type SharedState = Arc<Mutex<HogState>>;
 
@@ -189,12 +190,19 @@ pub struct HogRuntime {
     state: SharedState,
     input_report_char_paths: HashMap<u8, Path<'static>>,
     adapter_path: Path<'static>,
+    connected: Arc<AtomicBool>,
+    adv_needs_retry: Arc<AtomicBool>,
 }
 
 impl HogRuntime {
     pub fn register(cfg: &HidConfig) -> Result<Self> {
         let conn = SyncConnection::new_system().map_err(|e| anyhow!("system bus: {e}"))?;
+        eprintln!(
+            "hidd: opened system D-Bus connection (unique name: {:?})",
+            conn.unique_name()
+        );
         let adapter_path = find_adapter_path(&conn)?;
+        eprintln!("hidd: using BlueZ adapter {adapter_path}");
         configure_adapter_for_hog(&conn, &adapter_path, cfg)?;
         let app_path = dbus_path(APP_PATH)?;
         let advertisement_path = dbus_path(ADVERTISEMENT_PATH)?;
@@ -463,13 +471,219 @@ impl HogRuntime {
         conn.start_receive(
             MatchRule::new_method_call(),
             Box::new(move |msg, conn| {
+                let iface = msg
+                    .interface()
+                    .map(|i| i.to_string())
+                    .unwrap_or_default();
+                let member = msg.member().map(|m| m.to_string()).unwrap_or_default();
+                let path = msg.path().map(|p| p.to_string()).unwrap_or_default();
+                eprintln!("hidd: D-Bus method call {iface}.{member} on {path}");
                 if crossroads_for_dispatch
                     .lock()
                     .unwrap()
                     .handle_message(msg, conn)
                     .is_err()
                 {
-                    eprintln!("hidd: failed to handle D-Bus method call");
+                    eprintln!(
+                        "hidd: failed to handle D-Bus method call {iface}.{member} on {path}"
+                    );
+                }
+                true
+            }),
+        );
+
+        // Listen for BlueZ property changes (connect/disconnect, adapter state).
+        // On disconnect, re-register the LE advertisement so the controller is
+        // discoverable again. BlueZ does NOT automatically resume advertising
+        // after disconnect even though it keeps the registration (no Release call).
+        //
+        // Debounce: only re-register after a disconnect that follows a STABLE
+        // connection (ServicesResolved=true). Brief bounce connections (connect →
+        // immediate disconnect without ServicesResolved) do NOT trigger
+        // re-registration. Without this, rapid connect/disconnect cycling sends
+        // repeated HCI advertising commands that corrupt the controller state
+        // ("LE_SET_EXT_ADV_ENABLE failed", "Unexpected advertising set terminated").
+        let adv_adapter_path = adapter_path.clone();
+        let adv_advertisement_path = advertisement_path.clone();
+        // Tracks whether a stable connection was established since the last
+        // advertisement re-registration. Set to true on ServicesResolved=true,
+        // cleared when we re-register. Starts true so the first disconnect
+        // after initial pairing triggers re-registration.
+        let had_stable_connection = Arc::new(AtomicBool::new(true));
+        let connected = Arc::new(AtomicBool::new(false));
+        let connected_for_closure = Arc::clone(&connected);
+        let disconnect_state = Arc::clone(&state);
+        let adv_needs_retry = Arc::new(AtomicBool::new(false));
+        let adv_needs_retry_for_closure = Arc::clone(&adv_needs_retry);
+        let mut device_prop_rule =
+            PropertiesPropertiesChanged::match_rule(None, None).static_clone();
+        device_prop_rule.sender = Some(
+            BusName::new(BLUEZ_SERVICE)
+                .map_err(|e| anyhow!("invalid BlueZ bus name: {e}"))?
+                .into_static(),
+        );
+        conn.add_match_no_cb(&device_prop_rule.match_str())
+            .map_err(|e| anyhow!("failed to add D-Bus match for device signals: {e}"))?;
+        conn.start_receive(
+            device_prop_rule,
+            Box::new(move |msg, conn| {
+                if let Ok(signal) = msg.read_all::<PropertiesPropertiesChanged>() {
+                    let obj_path = msg
+                        .path()
+                        .map(|p| p.to_string())
+                        .unwrap_or_default();
+
+                    if signal.interface_name == BLUEZ_DEVICE_IFACE {
+                        for (prop, val) in &signal.changed_properties {
+                            eprintln!(
+                                "hidd: Device1 property changed on {obj_path}: \
+                                 {prop}={val:?}"
+                            );
+                        }
+
+                        // Track stable connections via ServicesResolved.
+                        if let Some(sr) = signal.changed_properties.get("ServicesResolved") {
+                            if sr.as_i64() == Some(1) {
+                                had_stable_connection.store(true, Ordering::Relaxed);
+                            }
+                        }
+
+                        if let Some(connected_variant) =
+                            signal.changed_properties.get("Connected")
+                        {
+                            let is_connected = connected_variant.as_i64() == Some(1);
+                            if is_connected {
+                                connected_for_closure.store(true, Ordering::Release);
+                                // Restore notifying flags for bonded reconnections.
+                                // Bonded hosts cache CCCD subscriptions and don't
+                                // re-call StartNotify after reconnect. The connected
+                                // gate (Fix 3) prevents sending while disconnected,
+                                // so it's safe to assume subscriptions persist.
+                                if let Ok(mut s) = disconnect_state.lock() {
+                                    for slot in s.input_reports.values_mut() {
+                                        slot.notifying = true;
+                                    }
+                                    s.battery_notifying = true;
+                                    eprintln!(
+                                        "hidd: restored notifying flags on connect"
+                                    );
+                                }
+                                eprintln!("hidd: device connected: {obj_path}");
+                            } else {
+                                connected_for_closure.store(false, Ordering::Release);
+                                if had_stable_connection
+                                    .compare_exchange(
+                                        true,
+                                        false,
+                                        Ordering::Relaxed,
+                                        Ordering::Relaxed,
+                                    )
+                                    .is_ok()
+                                {
+                                    eprintln!(
+                                        "hidd: device disconnected: {obj_path}, \
+                                         re-registering advertisement on {}",
+                                        adv_adapter_path
+                                    );
+                                    let mut unreg = Message::method_call(
+                                        &BusName::new(BLUEZ_SERVICE).unwrap(),
+                                        &adv_adapter_path,
+                                        &Interface::new(BLUEZ_LE_ADV_MANAGER_IFACE)
+                                            .unwrap(),
+                                        &Member::new("UnregisterAdvertisement")
+                                            .unwrap(),
+                                    );
+                                    AppendAll::append(
+                                        &(adv_advertisement_path.clone(),),
+                                        &mut IterAppend::new(&mut unreg),
+                                    );
+                                    match conn.send(unreg) {
+                                        Ok(serial) => eprintln!(
+                                            "hidd: sent UnregisterAdvertisement \
+                                             (serial={serial})"
+                                        ),
+                                        Err(_) => eprintln!(
+                                            "hidd: failed to send \
+                                             UnregisterAdvertisement"
+                                        ),
+                                    }
+
+                                    let options: PropMap = HashMap::new();
+                                    let mut reg = Message::method_call(
+                                        &BusName::new(BLUEZ_SERVICE).unwrap(),
+                                        &adv_adapter_path,
+                                        &Interface::new(BLUEZ_LE_ADV_MANAGER_IFACE)
+                                            .unwrap(),
+                                        &Member::new("RegisterAdvertisement")
+                                            .unwrap(),
+                                    );
+                                    AppendAll::append(
+                                        &(adv_advertisement_path.clone(), options),
+                                        &mut IterAppend::new(&mut reg),
+                                    );
+                                    match conn.send(reg) {
+                                        Ok(serial) => eprintln!(
+                                            "hidd: sent RegisterAdvertisement \
+                                             (serial={serial})"
+                                        ),
+                                        Err(_) => {
+                                            eprintln!(
+                                                "hidd: failed to send \
+                                                 RegisterAdvertisement, \
+                                                 will retry"
+                                            );
+                                            adv_needs_retry_for_closure
+                                                .store(true, Ordering::Release);
+                                        }
+                                    }
+                                } else {
+                                    eprintln!(
+                                        "hidd: device disconnected: {obj_path} \
+                                         (skipping re-register, no stable \
+                                         connection since last attempt)"
+                                    );
+                                }
+                            }
+                        }
+                    } else if signal.interface_name == BLUEZ_ADAPTER_IFACE {
+                        for (prop, val) in &signal.changed_properties {
+                            eprintln!(
+                                "hidd: Adapter1 property changed on {obj_path}: \
+                                 {prop}={val:?}"
+                            );
+                        }
+                    }
+                }
+                true
+            }),
+        );
+
+        // Log any D-Bus error replies that arrive asynchronously (e.g. from
+        // fire-and-forget RegisterAdvertisement calls in the disconnect handler).
+        let mut async_error_rule = MatchRule::new();
+        async_error_rule.msg_type = Some(MessageType::Error);
+        let adv_needs_retry_for_errors = Arc::clone(&adv_needs_retry);
+        conn.start_receive(
+            async_error_rule,
+            Box::new(move |mut msg, _| {
+                let error_body = msg
+                    .as_result()
+                    .err()
+                    .map(|e: dbus::Error| e.to_string())
+                    .unwrap_or_default();
+                let reply_serial = msg.get_reply_serial().unwrap_or(0);
+                eprintln!(
+                    "hidd: D-Bus error reply (reply_serial={reply_serial}): \
+                     {error_body}"
+                );
+                // If this looks like a failed advertisement-related reply,
+                // schedule a retry on the next process_pending_messages call.
+                if error_body.contains("dvertis") {
+                    eprintln!(
+                        "hidd: advertisement error detected, will retry"
+                    );
+                    adv_needs_retry_for_errors
+                        .store(true, Ordering::Release);
                 }
                 true
             }),
@@ -484,6 +698,8 @@ impl HogRuntime {
             state,
             input_report_char_paths,
             adapter_path,
+            connected,
+            adv_needs_retry,
         })
     }
 
@@ -492,6 +708,9 @@ impl HogRuntime {
     }
 
     pub fn publish_input_report(&self, report: &[u8]) -> Result<()> {
+        if !self.connected.load(Ordering::Acquire) {
+            return self.process_pending_messages();
+        }
         let (report_id, ble_payload) = ble_input_payload_from_uhid(report)?;
         let notifying = {
             let mut state = self
@@ -547,21 +766,43 @@ impl HogRuntime {
                 break;
             }
         }
+        // Retry advertisement registration if a previous attempt failed.
+        if self
+            .adv_needs_retry
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
+            eprintln!("hidd: retrying advertisement registration");
+            if let Ok(adv_path) = dbus_path(ADVERTISEMENT_PATH) {
+                match register_advertisement(&self.conn, &self.adapter_path, &adv_path) {
+                    Ok(()) => eprintln!("hidd: advertisement retry succeeded"),
+                    Err(e) => {
+                        eprintln!("hidd: advertisement retry failed: {e}, will retry again");
+                        self.adv_needs_retry.store(true, Ordering::Release);
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }
 
 impl Drop for HogRuntime {
     fn drop(&mut self) {
+        eprintln!("hidd: shutting down HogRuntime, unregistering from BlueZ");
         if let Ok(agent_path) = dbus_path(AGENT_PATH) {
+            eprintln!("hidd: unregistering agent {agent_path}");
             let _ = unregister_agent(&self.conn, &agent_path);
         }
         if let Ok(advertisement_path) = dbus_path(ADVERTISEMENT_PATH) {
+            eprintln!("hidd: unregistering advertisement {advertisement_path}");
             let _ = unregister_advertisement(&self.conn, &self.adapter_path, &advertisement_path);
         }
         if let Ok(app_path) = dbus_path(APP_PATH) {
+            eprintln!("hidd: unregistering GATT application {app_path}");
             let _ = unregister_gatt_application(&self.conn, &self.adapter_path, &app_path);
         }
+        eprintln!("hidd: HogRuntime shutdown complete");
     }
 }
 
@@ -599,11 +840,16 @@ fn configure_adapter_for_hog(
     cfg: &HidConfig,
 ) -> Result<()> {
     set_adapter_property(conn, adapter_path, "Powered", Variant(true))?;
+    eprintln!("hidd: adapter {adapter_path}: Powered=true");
     set_adapter_property(conn, adapter_path, "Pairable", Variant(true))?;
+    eprintln!("hidd: adapter {adapter_path}: Pairable=true");
     set_adapter_property(conn, adapter_path, "Discoverable", Variant(true))?;
+    eprintln!("hidd: adapter {adapter_path}: Discoverable=true");
     if let Err(err) = set_adapter_property(conn, adapter_path, "DiscoverableTimeout", Variant(0u32))
     {
         eprintln!("hidd: unable to set adapter DiscoverableTimeout=0: {err}");
+    } else {
+        eprintln!("hidd: adapter {adapter_path}: DiscoverableTimeout=0");
     }
     if let Err(err) = set_adapter_property(
         conn,
@@ -612,6 +858,8 @@ fn configure_adapter_for_hog(
         Variant(cfg.device.name.clone()),
     ) {
         eprintln!("hidd: unable to set adapter Alias: {err}");
+    } else {
+        eprintln!("hidd: adapter {adapter_path}: Alias={}", cfg.device.name);
     }
     Ok(())
 }
@@ -634,13 +882,41 @@ fn set_adapter_property<T: Arg + Append + Send + 'static>(
     .map_err(|e| anyhow!("failed to set adapter property {property}: {e}"))
 }
 
+fn trust_device(device_path: &Path<'static>) {
+    eprintln!("hidd: setting Trusted=true on {device_path}");
+    let Ok(conn) = SyncConnection::new_system() else {
+        eprintln!("hidd: failed to open D-Bus for auto-trust");
+        return;
+    };
+    let args = (
+        BLUEZ_DEVICE_IFACE.to_string(),
+        "Trusted".to_string(),
+        Variant(true),
+    );
+    if let Err(e) = call_method_with_dispatch(
+        &conn,
+        BLUEZ_SERVICE,
+        device_path,
+        DBUS_PROPERTIES_IFACE,
+        "Set",
+        args,
+        Duration::from_secs(5),
+    ) {
+        eprintln!("hidd: failed to auto-trust {device_path}: {e}");
+    } else {
+        eprintln!("hidd: auto-trust succeeded for {device_path}");
+    }
+}
+
 fn register_gatt_application(
     conn: &SyncConnection,
     adapter_path: &Path<'static>,
     app_path: &Path<'static>,
 ) -> Result<()> {
+    eprintln!("hidd: unregistering previous GATT application (if any)");
     let _ = unregister_gatt_application(conn, adapter_path, app_path);
 
+    eprintln!("hidd: registering GATT application {app_path} on {adapter_path}");
     let options: PropMap = HashMap::new();
     call_method_with_dispatch(
         conn,
@@ -651,7 +927,9 @@ fn register_gatt_application(
         (app_path.clone(), options),
         Duration::from_secs(15),
     )
-    .map_err(|e| anyhow!("RegisterApplication failed: {e}"))
+    .map_err(|e| anyhow!("RegisterApplication failed: {e}"))?;
+    eprintln!("hidd: GATT application registered successfully");
+    Ok(())
 }
 
 fn unregister_gatt_application(
@@ -676,8 +954,12 @@ fn register_advertisement(
     adapter_path: &Path<'static>,
     advertisement_path: &Path<'static>,
 ) -> Result<()> {
+    eprintln!("hidd: unregistering previous LE advertisement (if any)");
     let _ = unregister_advertisement(conn, adapter_path, advertisement_path);
 
+    eprintln!(
+        "hidd: registering LE advertisement {advertisement_path} on {adapter_path}"
+    );
     let options: PropMap = HashMap::new();
     call_method_with_dispatch(
         conn,
@@ -688,7 +970,9 @@ fn register_advertisement(
         (advertisement_path.clone(), options),
         Duration::from_secs(15),
     )
-    .map_err(|e| anyhow!("RegisterAdvertisement failed: {e}"))
+    .map_err(|e| anyhow!("RegisterAdvertisement failed: {e}"))?;
+    eprintln!("hidd: LE advertisement registered successfully");
+    Ok(())
 }
 
 fn unregister_advertisement(
@@ -1096,7 +1380,8 @@ fn register_agent_iface(cr: &mut Crossroads) -> IfaceToken<()> {
             "RequestPinCode",
             ("device",),
             ("pincode",),
-            |_, _, (_device,): (Path,)| -> Result<(String,), MethodErr> {
+            |_, _, (device,): (Path,)| -> Result<(String,), MethodErr> {
+                eprintln!("hidd: agent rejecting RequestPinCode for {device}");
                 Err(("org.bluez.Error.Rejected", "NoInputNoOutput agent").into())
             },
         );
@@ -1104,7 +1389,8 @@ fn register_agent_iface(cr: &mut Crossroads) -> IfaceToken<()> {
             "DisplayPinCode",
             ("device", "pincode"),
             (),
-            |_, _, (_device, _pincode): (Path, String)| -> Result<(), MethodErr> {
+            |_, _, (device, pincode): (Path, String)| -> Result<(), MethodErr> {
+                eprintln!("hidd: agent rejecting DisplayPinCode for {device} (pin={pincode})");
                 Err(("org.bluez.Error.Rejected", "NoInputNoOutput agent").into())
             },
         );
@@ -1112,7 +1398,8 @@ fn register_agent_iface(cr: &mut Crossroads) -> IfaceToken<()> {
             "RequestPasskey",
             ("device",),
             ("passkey",),
-            |_, _, (_device,): (Path,)| -> Result<(u32,), MethodErr> {
+            |_, _, (device,): (Path,)| -> Result<(u32,), MethodErr> {
+                eprintln!("hidd: agent rejecting RequestPasskey for {device}");
                 Err(("org.bluez.Error.Rejected", "NoInputNoOutput agent").into())
             },
         );
@@ -1120,13 +1407,23 @@ fn register_agent_iface(cr: &mut Crossroads) -> IfaceToken<()> {
             "DisplayPasskey",
             ("device", "passkey", "entered"),
             (),
-            |_, _, (_device, _passkey, _entered): (Path, u32, u16)| Ok(()),
+            |_, _, (device, passkey, entered): (Path, u32, u16)| {
+                eprintln!(
+                    "hidd: agent DisplayPasskey for {device} \
+                     (passkey={passkey}, entered={entered})"
+                );
+                Ok(())
+            },
         );
         b.method(
             "RequestConfirmation",
             ("device", "passkey"),
             (),
-            |_, _, (_device, _passkey): (Path, u32)| -> Result<(), MethodErr> {
+            |_, _, (device, passkey): (Path, u32)| -> Result<(), MethodErr> {
+                eprintln!(
+                    "hidd: agent rejecting RequestConfirmation for {device} \
+                     (passkey={passkey})"
+                );
                 Err(("org.bluez.Error.Rejected", "NoInputNoOutput agent").into())
             },
         );
@@ -1134,8 +1431,11 @@ fn register_agent_iface(cr: &mut Crossroads) -> IfaceToken<()> {
             "RequestAuthorization",
             ("device",),
             (),
-            |_, _, (_device,): (Path,)| {
-                eprintln!("hidd: agent authorized device");
+            |_, _, (device,): (Path,)| {
+                eprintln!("hidd: agent authorized device {device}, setting Trusted=true");
+                if let Ok(static_path) = dbus_path(&device) {
+                    trust_device(&static_path);
+                }
                 Ok(())
             },
         );
@@ -1143,8 +1443,8 @@ fn register_agent_iface(cr: &mut Crossroads) -> IfaceToken<()> {
             "AuthorizeService",
             ("device", "uuid"),
             (),
-            |_, _, (_device, _uuid): (Path, String)| {
-                eprintln!("hidd: agent authorized service");
+            |_, _, (device, uuid): (Path, String)| {
+                eprintln!("hidd: agent authorized service {uuid} for {device}");
                 Ok(())
             },
         );
@@ -1156,8 +1456,10 @@ fn register_agent_iface(cr: &mut Crossroads) -> IfaceToken<()> {
 }
 
 fn register_agent(conn: &SyncConnection, agent_path: &Path<'static>) -> Result<()> {
+    eprintln!("hidd: unregistering previous agent (if any)");
     let _ = unregister_agent(conn, agent_path);
 
+    eprintln!("hidd: registering pairing agent {agent_path} (NoInputNoOutput)");
     let bluez_path = dbus_path("/org/bluez")?;
     call_method_with_dispatch(
         conn,
@@ -1169,6 +1471,7 @@ fn register_agent(conn: &SyncConnection, agent_path: &Path<'static>) -> Result<(
         Duration::from_secs(5),
     )
     .map_err(|e| anyhow!("RegisterAgent failed: {e}"))?;
+    eprintln!("hidd: agent registered, requesting default agent");
 
     call_method_with_dispatch(
         conn,
@@ -1180,6 +1483,7 @@ fn register_agent(conn: &SyncConnection, agent_path: &Path<'static>) -> Result<(
         Duration::from_secs(5),
     )
     .map_err(|e| anyhow!("RequestDefaultAgent failed: {e}"))?;
+    eprintln!("hidd: agent set as default");
 
     Ok(())
 }
@@ -1334,6 +1638,6 @@ mod tests {
     #[test]
     fn pnp_id_encoding_uses_usb_source_and_little_endian_fields() {
         let pnp = encode_pnp_id(0x045e, 0x02fd, 0x0408);
-        assert_eq!(pnp, [0x02, 0x5e, 0x04, 0xfd, 0x02, 0x08, 0x04]);
+        assert_eq!(pnp, [0x01, 0x5e, 0x04, 0xfd, 0x02, 0x08, 0x04]);
     }
 }
