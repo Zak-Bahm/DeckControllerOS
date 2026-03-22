@@ -348,7 +348,7 @@ controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --timeout-seconds 3
 - Test script exits 0 (all PASS).
 - All manual disconnect/reconnect/forget/auto-refresh/error tests pass.
 
-### Step 7 — System actions (restart, power off, restart stack)
+### Step 7 — System actions (reload stack, power off) ✅ COMPLETE
 **Requires:** Loop 2 for Deck validation.
 
 **Actions:**
@@ -390,20 +390,39 @@ controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --timeout-seconds 3
 - Test script exits 0 (all PASS).
 - All manual system action tests pass.
 
-### Step 8 — Init script, auto-start, and display rotation
-**Requires:** Full ISO rebuild + reboot.
+### Step 8 — Init script, auto-start, and startup splash screen ✅ COMPLETE
+**Requires:** Full ISO rebuild + reboot (init script), Loop 2 for splash screen iteration.
 
 **Actions:**
+
+**Part A — Init script and auto-start:**
 - Create `configs/init/S50gui`:
   - Starts after `S45hidd`.
-  - `start)`: set `SLINT_KMS_ROTATION` env var if needed, launch `/usr/bin/controlleros-gui` in the background, redirect stdout/stderr to `/var/log/controlleros-gui.log`.
+  - `start)`: launch `/usr/bin/controlleros-gui` in the background with `SLINT_KMS_ROTATION=90 RUST_LOG=info`, redirect stdout/stderr to `/var/log/controlleros-gui.log`.
   - `stop)`: kill the `controlleros-gui` process.
   - `restart)`: stop then start.
-- If display rotation is needed (determined in Step 3), create a udev rule for touchscreen coordinate calibration matrix and include it in post-build.
 - Update `br2-external/board/controlleros/post-build.sh`:
   - Copy `S50gui` to `${TARGET_DIR}/etc/init.d/`.
   - Set executable permissions.
 - Modify inittab handling: disable the `tty1` getty so the GUI has clean access to the primary VT. Keep `tty2` and `tty3` gettys for debugging.
+
+**Part B — Startup splash screen:**
+- The GUI should launch **before** the BLE stack is fully ready, showing a startup splash screen immediately.
+- Splash screen layout:
+  - Full-screen black background.
+  - "ControllerOS" title text, centered vertically and horizontally.
+  - `Spinner` (indeterminate) centered below the title.
+- The GUI starts in "splash" mode. While in splash mode, the main UI (device list, system buttons, etc.) is hidden.
+- In the background, the GUI waits for subsystems to become ready:
+  - `bluetoothd` is running (check `pidof bluetoothd` or D-Bus connection to `org.bluez` succeeds).
+  - `hidd` is running (check `pidof hidd`).
+  - Initial `list_paired_devices()` call succeeds.
+- Once all subsystems report ready:
+  - Stop the spinner.
+  - Fade out the splash screen with an opacity animation (e.g., 500ms ease-out).
+  - Reveal the main UI underneath.
+- Add a Slint `in-out property <bool> splash-visible: true` to `MainWindow`. The splash overlay renders on top of the main content when `true`. An opacity animation on the splash `Rectangle` handles the fade-out transition.
+- Add a timeout (e.g., 15 seconds) — if subsystems haven't initialized by then, dismiss the splash anyway and show the main UI with an error in the status bar.
 
 **Test script: `scripts/tests/test_gui_step8_autostart.sh`**
 
@@ -423,9 +442,10 @@ Automated checks:
 - Dump GUI log tail for diagnostics
 
 Manual checks (printed as `MANUAL:` lines):
-- GUI appeared on screen automatically after boot, no login needed
-- Display is landscape (1280×800), not portrait
-- Tap buttons in each corner → taps register on correct elements (touch calibration)
+- On boot, splash screen appears first: "ControllerOS" centered with spinning indicator
+- After a few seconds, spinner stops and splash fades out to reveal the main device list UI
+- Splash fade-out animation is smooth (not an instant cut)
+- GUI is landscape (1280×800), touch works correctly
 - `chvt 2` → login prompt visible, `chvt 1` → GUI still visible
 - Pair a host → controller input works while GUI is displayed
 
@@ -436,7 +456,7 @@ controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test
 
 **Complete when:**
 - Test script exits 0 (all PASS).
-- All manual visual/touch/VT-switching tests pass.
+- All manual visual/touch/VT-switching/splash tests pass.
 
 ### Step 9 — Documentation and dev tooling
 **Requires:** Loop 1 (host-only).

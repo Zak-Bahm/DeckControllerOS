@@ -20,12 +20,17 @@ cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/init/S41bluetooth-power" \
 	"${TARGET_DIR}/etc/init.d/S41bluetooth-power"
 cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/init/S45hidd" \
 	"${TARGET_DIR}/etc/init.d/S45hidd"
+cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/init/S01gui" \
+	"${TARGET_DIR}/etc/init.d/S01gui"
+# Remove old S50gui from previous builds (renamed to S01gui)
+rm -f "${TARGET_DIR}/etc/init.d/S50gui"
 chmod 0755 "${TARGET_DIR}/etc/init.d/S20dbus-prep" \
 	"${TARGET_DIR}/etc/init.d/S30dbus" \
 	"${TARGET_DIR}/etc/init.d/S35bluetooth-storage" \
 	"${TARGET_DIR}/etc/init.d/S40bluetoothd" \
 	"${TARGET_DIR}/etc/init.d/S41bluetooth-power" \
-	"${TARGET_DIR}/etc/init.d/S45hidd"
+	"${TARGET_DIR}/etc/init.d/S45hidd" \
+	"${TARGET_DIR}/etc/init.d/S01gui"
 
 mkdir -p "${TARGET_DIR}/usr/bin"
 cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/dev/controlleros-dev-update" \
@@ -49,9 +54,12 @@ mkdir -p "${TARGET_DIR}/etc/controlleros/mapping"
 cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/mapping/xbox.toml" \
 	"${TARGET_DIR}/etc/controlleros/mapping/xbox.toml"
 
-# Ensure additional virtual console gettys for multi-terminal debugging.
+# Disable tty1 getty so the GUI has clean access to the primary VT.
+# Keep tty2 and tty3 gettys for debugging.
 INITTAB="${TARGET_DIR}/etc/inittab"
 if [ -f "${INITTAB}" ]; then
+	# Comment out any tty1 getty lines
+	sed -i 's/^.*getty.*tty1/#&/' "${INITTAB}"
 	if ! grep -q '^tty2::respawn:/sbin/getty -L  tty2 0 vt100 # GENERIC_SERIAL$' "${INITTAB}"; then
 		printf '%s\n' 'tty2::respawn:/sbin/getty -L  tty2 0 vt100 # GENERIC_SERIAL' >> "${INITTAB}"
 	fi

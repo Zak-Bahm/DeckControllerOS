@@ -1,0 +1,84 @@
+#!/bin/sh
+
+DAEMON="controlleros-gui"
+DAEMON_PATH="/usr/bin/controlleros-gui"
+PIDFILE="/var/run/$DAEMON.pid"
+LOGFILE="/var/log/$DAEMON.log"
+
+start() {
+	printf 'Starting %s: ' "$DAEMON"
+	if [ ! -x "$DAEMON_PATH" ]; then
+		echo "FAIL"
+		echo "$DAEMON_PATH not found or not executable" >&2
+		return 1
+	fi
+	# Suppress kernel console messages on tty1 so boot text doesn't
+	# appear under the GUI. Only critical messages (level 1) get through.
+	dmesg -n 1 2>/dev/null || true
+	# Clear the text console before launching
+	printf '\033[2J\033[H' > /dev/tty1 2>/dev/null || true
+	# Kill tty1 getty to free the primary VT for GUI rendering
+	GETTY_PID=$(ps | grep '[g]etty.*tty1' | awk '{print $1}')
+	if [ -n "$GETTY_PID" ]; then
+		kill "$GETTY_PID" 2>/dev/null || true
+		sleep 1
+	fi
+	chvt 1 2>/dev/null || true
+	start-stop-daemon --start --background --make-pidfile \
+		--pidfile "$PIDFILE" \
+		--startas /bin/sh -- -c "SLINT_KMS_ROTATION=90 RUST_LOG=info exec $DAEMON_PATH >>$LOGFILE 2>&1"
+	status=$?
+	if [ "$status" -eq 0 ]; then
+		echo "OK"
+	else
+		echo "FAIL"
+	fi
+	return "$status"
+}
+
+stop() {
+	printf 'Stopping %s: ' "$DAEMON"
+	start-stop-daemon --stop --pidfile "$PIDFILE"
+	status=$?
+	if [ "$status" -eq 0 ]; then
+		echo "OK"
+	else
+		echo "FAIL"
+		return "$status"
+	fi
+	rm -f "$PIDFILE"
+	return "$status"
+}
+
+restart() {
+	stop
+	sleep 1
+	start
+}
+
+status() {
+	if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+		echo "$DAEMON is running (pid=$(cat "$PIDFILE"))"
+		echo "  log: $LOGFILE"
+		if [ -f "$LOGFILE" ]; then
+			echo "  last 5 lines:"
+			tail -n5 "$LOGFILE" | sed 's/^/    /'
+		fi
+		return 0
+	else
+		echo "$DAEMON is not running"
+		if [ -f "$LOGFILE" ]; then
+			echo "  last 5 lines of log:"
+			tail -n5 "$LOGFILE" | sed 's/^/    /'
+		fi
+		return 1
+	fi
+}
+
+case "$1" in
+	start|stop|restart|status)
+		"$1";;
+	*)
+		echo "Usage: $0 {start|stop|restart|status}"
+		exit 1
+esac

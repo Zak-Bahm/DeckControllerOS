@@ -2,6 +2,22 @@
 
 set -e
 
+CLEAN_RUST=0
+for arg in "$@"; do
+  case "$arg" in
+    --clean-rust) CLEAN_RUST=1 ;;
+    -h|--help)
+      echo "Usage: $0 [--clean-rust]"
+      echo "  --clean-rust  Force a full clean rebuild of all Rust packages"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $arg" >&2
+      exit 1
+      ;;
+  esac
+done
+
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 BUILDROOT_DIR="$ROOT_DIR/buildroot"
 OUT_DIR="$ROOT_DIR/out/buildroot"
@@ -10,25 +26,24 @@ DEFCONFIG="$ROOT_DIR/configs/buildroot/controlleros_defconfig"
 OUTPUT_ISO="$ROOT_DIR/out/controlleros.iso"
 CONFIG_HASH_FILE="$OUT_DIR/.last_defconfig_hash"
 
+RUST_PACKAGES="hidd controllerosctl controlleros-gui"
+
 make -C "$BUILDROOT_DIR" \
   O="$OUT_DIR" \
   BR2_EXTERNAL="$BR2_EXTERNAL_DIR" \
   BR2_DEFCONFIG="$DEFCONFIG" defconfig
 
-# Force rebuild of local Rust crates. Buildroot stamps are existence-based,
-# not timestamp-based — a newer .stamp_rsynced does NOT trigger a rebuild
-# if .stamp_built already exists. We remove .stamp_rsynced to force re-sync,
-# then use Buildroot's <pkg>-rebuild target to clear build/install stamps.
-for pkg in controlleros-hidd controllerosctl controlleros-gui; do
-  stamp="$OUT_DIR/build/${pkg}-0.1.0/.stamp_rsynced"
-  if [ -f "$stamp" ]; then
-    rm -f "$stamp"
+if [ "$CLEAN_RUST" -eq 1 ]; then
+  # Full dirclean: removes the entire build directory for each Rust package,
+  # forcing a complete re-rsync, re-vendor, and recompile from scratch.
+  echo "Cleaning Rust packages: $RUST_PACKAGES"
+  for pkg in $RUST_PACKAGES; do
     make -C "$BUILDROOT_DIR" \
       O="$OUT_DIR" \
       BR2_EXTERNAL="$BR2_EXTERNAL_DIR" \
-      "${pkg}-rebuild"
-  fi
-done
+      "${pkg}-dirclean" 2>/dev/null || true
+  done
+fi
 
 make -C "$BUILDROOT_DIR" \
   O="$OUT_DIR" \

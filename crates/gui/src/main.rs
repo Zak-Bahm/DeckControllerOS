@@ -5,6 +5,8 @@ slint::include_modules!();
 
 #[cfg(feature = "deck")]
 mod bluez;
+#[cfg(feature = "deck")]
+mod system;
 
 fn main() -> anyhow::Result<()> {
     // Handle --list-devices CLI before any GUI setup
@@ -33,22 +35,62 @@ fn main() -> anyhow::Result<()> {
         handle
     };
 
-    // Initial device load
+    // Initial battery level
+    {
+        let info = read_battery_info();
+        window.set_battery_level(info.level);
+        window.set_battery_charging(info.charging);
+    }
+
+    // Battery polling timer
+    {
+        let w = window.as_weak();
+        let timer = slint::Timer::default();
+        timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_secs(30),
+            move || {
+                if let Some(w) = w.upgrade() {
+                    let info = read_battery_info();
+                    w.set_battery_level(info.level);
+                    w.set_battery_charging(info.charging);
+                }
+            },
+        );
+        std::mem::forget(timer);
+    }
+
+    // Startup sequence: wait for subsystems, then dismiss splash
     #[cfg(feature = "deck")]
     {
         let w = window.as_weak();
         let h = rt_handle.clone();
         rt_handle.spawn(async move {
-            match refresh_devices(&w).await {
-                Ok(()) => {}
-                Err(e) => {
-                    tracing::error!("Initial device load failed: {e}");
-                    set_status(&w, &format!("Error: {e}"));
-                }
+            let ready = wait_for_subsystems(&w).await;
+            if !ready {
+                set_status(&w, "Some services failed to start");
             }
+            dismiss_splash(&w);
             // Start polling loop
             poll_devices(w, h).await;
         });
+    }
+
+    #[cfg(not(feature = "deck"))]
+    {
+        // No subsystems to wait for on desktop — dismiss splash immediately
+        let w = window.as_weak();
+        let timer = slint::Timer::default();
+        timer.start(
+            slint::TimerMode::SingleShot,
+            std::time::Duration::from_millis(500),
+            move || {
+                if let Some(w) = w.upgrade() {
+                    w.set_splash_visible(false);
+                }
+            },
+        );
+        std::mem::forget(timer);
     }
 
     // Disconnect callback
@@ -97,7 +139,7 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Confirm action callback (forget, restart-stack, restart, power-off)
+    // Confirm action callback (forget, reload, power-off)
     #[cfg(feature = "deck")]
     window.on_confirm_action({
         let w = window.as_weak();
@@ -146,17 +188,29 @@ fn main() -> anyhow::Result<()> {
                         set_busy(&w, false);
                     });
                 }
-                "restart-stack" => {
-                    tracing::info!("Restart stack requested");
-                    win.set_status_text("Restarting Bluetooth stack...".into());
-                }
-                "restart" => {
-                    tracing::info!("System restart requested");
-                    win.set_status_text("Restarting...".into());
+                "reload" => {
+                    let w = w.clone();
+                    let h = h.clone();
+                    h.spawn(async move {
+                        set_busy(&w, true);
+                        set_status(&w, "Reloading stack...");
+                        if let Err(e) = system::reload_stack().await {
+                            tracing::error!("Reload failed: {e}");
+                            set_status(&w, &format!("Reload error: {e}"));
+                            set_busy(&w, false);
+                        }
+                    });
                 }
                 "power-off" => {
-                    tracing::info!("System power off requested");
-                    win.set_status_text("Powering off...".into());
+                    let w = w.clone();
+                    let h = h.clone();
+                    h.spawn(async move {
+                        set_status(&w, "Powering off...");
+                        if let Err(e) = system::system_poweroff().await {
+                            tracing::error!("Power off failed: {e}");
+                            set_status(&w, &format!("Power off error: {e}"));
+                        }
+                    });
                 }
                 _ => {}
             }
@@ -176,11 +230,8 @@ fn main() -> anyhow::Result<()> {
                 "forget" => {
                     w.set_status_text(format!("Forgetting device {index}...").into());
                 }
-                "restart-stack" => {
-                    w.set_status_text("Restarting Bluetooth stack...".into());
-                }
-                "restart" => {
-                    w.set_status_text("Restarting...".into());
+                "reload" => {
+                    w.set_status_text("Reloading...".into());
                 }
                 "power-off" => {
                     w.set_status_text("Powering off...".into());
@@ -294,7 +345,7 @@ async fn refresh_devices(w: &slint::Weak<MainWindow>) -> anyhow::Result<()> {
         String::new()
     };
 
-    let items: Vec<BtDeviceModel> = devices
+    let mut items: Vec<BtDeviceModel> = devices
         .iter()
         .map(|d| BtDeviceModel {
             name: d.name.clone().into(),
@@ -303,6 +354,11 @@ async fn refresh_devices(w: &slint::Weak<MainWindow>) -> anyhow::Result<()> {
             obj_path: d.obj_path.clone().into(),
         })
         .collect();
+    items.sort_by(|a, b| {
+        b.connected
+            .cmp(&a.connected)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     let w = w.clone();
     slint::invoke_from_event_loop(move || {
         if let Some(w) = w.upgrade() {
@@ -319,6 +375,75 @@ async fn refresh_devices(w: &slint::Weak<MainWindow>) -> anyhow::Result<()> {
 }
 
 #[cfg(feature = "deck")]
+async fn wait_for_subsystems(w: &slint::Weak<MainWindow>) -> bool {
+    use tokio::time::{timeout, Duration};
+
+    let deadline = Duration::from_secs(15);
+    let result = timeout(deadline, async {
+        // Wait for bluetoothd
+        loop {
+            if tokio::process::Command::new("pidof")
+                .arg("bluetoothd")
+                .output()
+                .await
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+            {
+                tracing::info!("bluetoothd is running");
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+
+        // Wait for hidd
+        loop {
+            if tokio::process::Command::new("pidof")
+                .arg("hidd")
+                .output()
+                .await
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+            {
+                tracing::info!("hidd is running");
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+
+        // Initial device load
+        match refresh_devices(w).await {
+            Ok(()) => tracing::info!("Initial device load complete"),
+            Err(e) => tracing::error!("Initial device load failed: {e}"),
+        }
+    })
+    .await;
+
+    match result {
+        Ok(()) => {
+            tracing::info!("All subsystems ready");
+            true
+        }
+        Err(_) => {
+            tracing::warn!("Subsystem startup timed out after 15s");
+            // Try loading devices anyway
+            let _ = refresh_devices(w).await;
+            false
+        }
+    }
+}
+
+#[cfg(feature = "deck")]
+fn dismiss_splash(w: &slint::Weak<MainWindow>) {
+    let w = w.clone();
+    slint::invoke_from_event_loop(move || {
+        if let Some(w) = w.upgrade() {
+            w.set_splash_visible(false);
+        }
+    })
+    .ok();
+}
+
+#[cfg(feature = "deck")]
 async fn poll_devices(w: slint::Weak<MainWindow>, _h: tokio::runtime::Handle) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(3));
     loop {
@@ -330,4 +455,36 @@ async fn poll_devices(w: slint::Weak<MainWindow>, _h: tokio::runtime::Handle) {
             }
         }
     }
+}
+
+struct BatteryInfo {
+    level: f32,
+    charging: bool,
+}
+
+fn read_battery_info() -> BatteryInfo {
+    let try_read = || -> Option<BatteryInfo> {
+        for entry in std::fs::read_dir("/sys/class/power_supply").ok()? {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            let capacity = path.join("capacity");
+            if capacity.exists() {
+                let val = std::fs::read_to_string(&capacity).ok()?;
+                let pct: f32 = val.trim().parse().ok()?;
+                let charging = std::fs::read_to_string(path.join("status"))
+                    .ok()
+                    .map(|s| s.trim().eq_ignore_ascii_case("charging"))
+                    .unwrap_or(false);
+                return Some(BatteryInfo {
+                    level: pct / 100.0,
+                    charging,
+                });
+            }
+        }
+        None
+    };
+    try_read().unwrap_or(BatteryInfo {
+        level: 1.0,
+        charging: false,
+    })
 }

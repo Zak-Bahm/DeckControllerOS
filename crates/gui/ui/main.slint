@@ -1,4 +1,4 @@
-import { ListView, VerticalBox, HorizontalBox, Spinner } from "std-widgets.slint";
+import { ListView, VerticalBox, HorizontalBox, Spinner, ProgressIndicator } from "std-widgets.slint";
 import { Theme, SteamButton, IconButton } from "theme.slint";
 
 export struct BtDeviceModel {
@@ -24,11 +24,13 @@ export component MainWindow inherits Window {
 
     in-out property <string> status-text: "";
     in-out property <bool> busy: false;
+    in-out property <float> battery-level: 1.0;
+    in-out property <bool> battery-charging: false;
+    in-out property <bool> splash-visible: true;
 
     callback disconnect(int);
     callback forget(int);
-    callback restart-stack();
-    callback restart();
+    callback reload();
     callback power-off();
     callback confirm-action();
     callback cancel-action();
@@ -83,6 +85,23 @@ export component MainWindow inherits Window {
                 vertical-stretch: 1;
             }
 
+            // Battery indicator
+            VerticalLayout {
+                spacing: Theme.spacing-sm;
+
+                Text {
+                    text: (root.battery-charging ? "Charging: " : "Battery: ") + Math.round(root.battery-level * 100) + "%";
+                    color: Theme.text-secondary;
+                    font-size: Theme.font-detail;
+                    horizontal-alignment: center;
+                }
+
+                ProgressIndicator {
+                    height: 8px;
+                    progress: root.battery-level;
+                }
+            }
+
             // System buttons
             VerticalLayout {
                 spacing: Theme.spacing-sm;
@@ -91,17 +110,7 @@ export component MainWindow inherits Window {
                     label: "Reload";
                     clicked => {
                         root.confirm-message = "Reload System?";
-                        root.pending-action = "restart-stack";
-                        root.pending-index = -1;
-                        root.confirm-visible = true;
-                    }
-                }
-
-                SteamButton {
-                    label: "Restart";
-                    clicked => {
-                        root.confirm-message = "Restart the system?";
-                        root.pending-action = "restart";
+                        root.pending-action = "reload";
                         root.pending-index = -1;
                         root.confirm-visible = true;
                     }
@@ -189,6 +198,43 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // Splash screen overlay
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: Theme.bg;
+        opacity: root.splash-visible ? 1.0 : 0.0;
+        visible: self.opacity > 0;
+
+        animate opacity {
+            duration: 500ms;
+            easing: ease-out;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: Theme.spacing-lg;
+
+            Text {
+                text: "ControllerOS";
+                font-size: 72px;
+                font-weight: 700;
+                color: Theme.text-primary;
+                horizontal-alignment: center;
+            }
+
+            HorizontalLayout {
+                alignment: center;
+
+                Spinner {
+                    indeterminate: true;
+                    width: 48px;
+                    height: 48px;
                 }
             }
         }
