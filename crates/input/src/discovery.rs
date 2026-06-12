@@ -92,12 +92,12 @@ fn build_device_info(path: &Path, dev: &Device) -> InputDeviceInfo {
     let product = input_id.product();
 
     let supported_abs = dev.supported_absolute_axes();
-    let has_abs = supported_abs.map_or(false, |axes| {
+    let has_abs = supported_abs.is_some_and(|axes| {
         axes.contains(AbsoluteAxisCode::ABS_X) || axes.contains(AbsoluteAxisCode::ABS_RX)
     });
 
     let supported_keys = dev.supported_keys();
-    let has_gamepad_keys = supported_keys.map_or(false, |keys| keys.contains(KeyCode::BTN_SOUTH));
+    let has_gamepad_keys = supported_keys.is_some_and(|keys| keys.contains(KeyCode::BTN_SOUTH));
 
     let is_deck_gamepad = is_steam_deck_gamepad(&name, vendor, product, has_abs, has_gamepad_keys);
 

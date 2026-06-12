@@ -77,7 +77,7 @@ const REPORT_TYPE_INPUT: u8 = 0x01;
 const REPORT_TYPE_OUTPUT: u8 = 0x02;
 const HID_INFO_BCD: [u8; 2] = [0x11, 0x01];
 const HID_FLAG_REMOTE_WAKE: u8 = 0x01;
-const PNP_ID_VENDOR_SOURCE_USB: u8 = 0x01;
+const PNP_ID_VENDOR_SOURCE_USB: u8 = 0x02;
 
 type SharedState = Arc<Mutex<HogState>>;
 
@@ -471,10 +471,7 @@ impl HogRuntime {
         conn.start_receive(
             MatchRule::new_method_call(),
             Box::new(move |msg, conn| {
-                let iface = msg
-                    .interface()
-                    .map(|i| i.to_string())
-                    .unwrap_or_default();
+                let iface = msg.interface().map(|i| i.to_string()).unwrap_or_default();
                 let member = msg.member().map(|m| m.to_string()).unwrap_or_default();
                 let path = msg.path().map(|p| p.to_string()).unwrap_or_default();
                 eprintln!("hidd: D-Bus method call {iface}.{member} on {path}");
@@ -528,10 +525,7 @@ impl HogRuntime {
             device_prop_rule,
             Box::new(move |msg, conn| {
                 if let Ok(signal) = msg.read_all::<PropertiesPropertiesChanged>() {
-                    let obj_path = msg
-                        .path()
-                        .map(|p| p.to_string())
-                        .unwrap_or_default();
+                    let obj_path = msg.path().map(|p| p.to_string()).unwrap_or_default();
 
                     if signal.interface_name == BLUEZ_DEVICE_IFACE {
                         for (prop, val) in &signal.changed_properties {
@@ -548,8 +542,7 @@ impl HogRuntime {
                             }
                         }
 
-                        if let Some(connected_variant) =
-                            signal.changed_properties.get("Connected")
+                        if let Some(connected_variant) = signal.changed_properties.get("Connected")
                         {
                             let is_connected = connected_variant.as_i64() == Some(1);
                             if is_connected {
@@ -564,9 +557,7 @@ impl HogRuntime {
                                         slot.notifying = true;
                                     }
                                     s.battery_notifying = true;
-                                    eprintln!(
-                                        "hidd: restored notifying flags on connect"
-                                    );
+                                    eprintln!("hidd: restored notifying flags on connect");
                                 }
                                 eprintln!("hidd: device connected: {obj_path}");
                             } else {
@@ -588,10 +579,8 @@ impl HogRuntime {
                                     let mut unreg = Message::method_call(
                                         &BusName::new(BLUEZ_SERVICE).unwrap(),
                                         &adv_adapter_path,
-                                        &Interface::new(BLUEZ_LE_ADV_MANAGER_IFACE)
-                                            .unwrap(),
-                                        &Member::new("UnregisterAdvertisement")
-                                            .unwrap(),
+                                        &Interface::new(BLUEZ_LE_ADV_MANAGER_IFACE).unwrap(),
+                                        &Member::new("UnregisterAdvertisement").unwrap(),
                                     );
                                     AppendAll::append(
                                         &(adv_advertisement_path.clone(),),
@@ -612,10 +601,8 @@ impl HogRuntime {
                                     let mut reg = Message::method_call(
                                         &BusName::new(BLUEZ_SERVICE).unwrap(),
                                         &adv_adapter_path,
-                                        &Interface::new(BLUEZ_LE_ADV_MANAGER_IFACE)
-                                            .unwrap(),
-                                        &Member::new("RegisterAdvertisement")
-                                            .unwrap(),
+                                        &Interface::new(BLUEZ_LE_ADV_MANAGER_IFACE).unwrap(),
+                                        &Member::new("RegisterAdvertisement").unwrap(),
                                     );
                                     AppendAll::append(
                                         &(adv_advertisement_path.clone(), options),
@@ -679,11 +666,8 @@ impl HogRuntime {
                 // If this looks like a failed advertisement-related reply,
                 // schedule a retry on the next process_pending_messages call.
                 if error_body.contains("dvertis") {
-                    eprintln!(
-                        "hidd: advertisement error detected, will retry"
-                    );
-                    adv_needs_retry_for_errors
-                        .store(true, Ordering::Release);
+                    eprintln!("hidd: advertisement error detected, will retry");
+                    adv_needs_retry_for_errors.store(true, Ordering::Release);
                 }
                 true
             }),
@@ -957,9 +941,7 @@ fn register_advertisement(
     eprintln!("hidd: unregistering previous LE advertisement (if any)");
     let _ = unregister_advertisement(conn, adapter_path, advertisement_path);
 
-    eprintln!(
-        "hidd: registering LE advertisement {advertisement_path} on {adapter_path}"
-    );
+    eprintln!("hidd: registering LE advertisement {advertisement_path} on {adapter_path}");
     let options: PropMap = HashMap::new();
     call_method_with_dispatch(
         conn,
@@ -1638,6 +1620,6 @@ mod tests {
     #[test]
     fn pnp_id_encoding_uses_usb_source_and_little_endian_fields() {
         let pnp = encode_pnp_id(0x045e, 0x02fd, 0x0408);
-        assert_eq!(pnp, [0x01, 0x5e, 0x04, 0xfd, 0x02, 0x08, 0x04]);
+        assert_eq!(pnp, [0x02, 0x5e, 0x04, 0xfd, 0x02, 0x08, 0x04]);
     }
 }

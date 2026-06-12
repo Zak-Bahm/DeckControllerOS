@@ -64,9 +64,10 @@ pub const XBOX_ONE_S_1708_HID_REPORT_DESCRIPTOR: [u8; 334] = [
     0x85, 0x04, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x01, 0x81, 0x02, 0xc0,
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HidProfileMode {
+    #[default]
     #[serde(rename = "xbox_one_s_1708")]
     XboxOneS1708,
 }
@@ -94,12 +95,6 @@ impl HidProfileMode {
         match self {
             Self::XboxOneS1708 => XBOX_INPUT_REPORT_ID,
         }
-    }
-}
-
-impl Default for HidProfileMode {
-    fn default() -> Self {
-        Self::XboxOneS1708
     }
 }
 

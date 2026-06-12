@@ -381,7 +381,7 @@ fn handle_uhid_event(
             let data = &event[4..4 + size];
 
             *dropped_output_reports += 1;
-            if *dropped_output_reports <= 3 || *dropped_output_reports % 100 == 0 {
+            if *dropped_output_reports <= 3 || dropped_output_reports.is_multiple_of(100) {
                 if let Some(parsed) = OutputReport::parse(data) {
                     eprintln!(
                         "hidd: dropped UHID_OUTPUT rtype={rtype} rumble={{lt:{}, rt:{}, weak:{}, strong:{}}} count={}",
