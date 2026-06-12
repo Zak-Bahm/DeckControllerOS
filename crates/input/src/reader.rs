@@ -272,7 +272,6 @@ mod tests {
 
     fn stick_mapping(deadzone: i32) -> AxisMapping {
         AxisMapping {
-            evdev_code: 0,
             hid_axis: "lx".to_string(),
             evdev_min: -32767,
             evdev_max: 32767,
@@ -283,7 +282,6 @@ mod tests {
 
     fn trigger_mapping() -> AxisMapping {
         AxisMapping {
-            evdev_code: 0,
             hid_axis: "lt".to_string(),
             evdev_min: 0,
             evdev_max: 32767,

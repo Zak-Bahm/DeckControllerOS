@@ -3,6 +3,6 @@ mod hidraw;
 mod mapping;
 mod reader;
 
-pub use discovery::{discover_devices, select_device, InputDeviceInfo};
-pub use mapping::{AxisMapping, ButtonMapping, DeviceFilter, MappingConfig};
+pub use discovery::{discover_devices, InputDeviceInfo};
+pub use mapping::{AxisMapping, MappingConfig};
 pub use reader::InputReader;

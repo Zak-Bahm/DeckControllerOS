@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-use crate::mapping::DeviceFilter;
 use evdev::{AbsoluteAxisCode, Device, KeyCode};
 use std::path::{Path, PathBuf};
 
@@ -55,33 +54,6 @@ pub fn discover_devices() -> Vec<InputDeviceInfo> {
     // Sort by path for stable output.
     devices.sort_by(|a, b| a.path.cmp(&b.path));
     devices
-}
-
-/// Select the first device matching a [`DeviceFilter`].
-///
-/// Tries in order: exact name match, then vendor/product match,
-/// then falls back to the first device flagged `is_deck_gamepad`.
-pub fn select_device(
-    devices: &[InputDeviceInfo],
-    filter: &DeviceFilter,
-) -> Option<InputDeviceInfo> {
-    // Exact name match
-    if let Some(ref name) = filter.name {
-        if let Some(d) = devices.iter().find(|d| d.name == *name) {
-            return Some(d.clone());
-        }
-    }
-    // VID/PID match with gamepad capabilities
-    if let (Some(vid), Some(pid)) = (filter.vendor_id, filter.product_id) {
-        if let Some(d) = devices
-            .iter()
-            .find(|d| d.vendor == vid && d.product == pid && d.has_abs && d.has_gamepad_keys)
-        {
-            return Some(d.clone());
-        }
-    }
-    // Fallback: first Deck gamepad
-    devices.iter().find(|d| d.is_deck_gamepad).cloned()
 }
 
 fn build_device_info(path: &Path, dev: &Device) -> InputDeviceInfo {
@@ -255,60 +227,5 @@ mod tests {
             true,
             true
         ));
-    }
-
-    fn make_test_info(name: &str, vendor: u16, product: u16, deck: bool) -> InputDeviceInfo {
-        InputDeviceInfo {
-            path: PathBuf::from(format!("/dev/input/event{}", vendor)),
-            name: name.to_string(),
-            phys: String::new(),
-            vendor,
-            product,
-            has_abs: deck,
-            has_gamepad_keys: deck,
-            is_deck_gamepad: deck,
-            caps_summary: String::new(),
-        }
-    }
-
-    #[test]
-    fn select_device_by_name() {
-        let devices = vec![
-            make_test_info("Keyboard", 0x1234, 0x0001, false),
-            make_test_info("Steam Deck", 0x28DE, 0x1205, true),
-        ];
-        let filter = DeviceFilter {
-            name: Some("Steam Deck".to_string()),
-            vendor_id: None,
-            product_id: None,
-        };
-        let selected = select_device(&devices, &filter).unwrap();
-        assert_eq!(selected.name, "Steam Deck");
-    }
-
-    #[test]
-    fn select_device_fallback_to_deck_gamepad() {
-        let devices = vec![
-            make_test_info("Keyboard", 0x1234, 0x0001, false),
-            make_test_info("Steam Deck", 0x28DE, 0x1205, true),
-        ];
-        let filter = DeviceFilter {
-            name: None,
-            vendor_id: None,
-            product_id: None,
-        };
-        let selected = select_device(&devices, &filter).unwrap();
-        assert_eq!(selected.name, "Steam Deck");
-    }
-
-    #[test]
-    fn select_device_returns_none_when_no_match() {
-        let devices = vec![make_test_info("Keyboard", 0x1234, 0x0001, false)];
-        let filter = DeviceFilter {
-            name: Some("Steam Deck".to_string()),
-            vendor_id: None,
-            product_id: None,
-        };
-        assert!(select_device(&devices, &filter).is_none());
     }
 }

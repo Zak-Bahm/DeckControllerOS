@@ -83,9 +83,10 @@ These controls produce no changes in the Xbox HID report.
 
 ## Configuration
 
-Mapping parameters are configured in `configs/mapping/xbox.toml` (installed to `/etc/controlleros/mapping/xbox.toml`).
+Axis normalization parameters are configured in `configs/mapping/xbox.toml` (installed to `/etc/controlleros/mapping/xbox.toml`). Each `[[axes]]` entry is matched by `hid_axis` name (`lx`, `ly`, `rx`, `ry`, `lt`, `rt`):
 
-Key parameters:
-- `deadzone`: Per-axis deadzone threshold (default: 4000 for sticks, 0 for triggers)
-- `source_range_min` / `source_range_max`: Raw input range
-- `output_range_min` / `output_range_max`: Mapped output range
+- `evdev_min` / `evdev_max`: Raw input range from the Deck report
+- `deadzone`: Inner deadzone radius (default: 4000 for sticks, 0 for triggers)
+- `invert`: Invert the axis value (default: false)
+
+Button and d-pad bit positions are **not** configurable — they are fixed by the Deck's hidraw report layout (tables above, implemented in `crates/input/src/reader.rs`). Legacy `[device]` and `[[buttons]]` sections in existing config files are accepted and ignored.
