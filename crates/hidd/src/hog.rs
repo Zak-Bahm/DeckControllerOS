@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -190,7 +190,8 @@ pub struct HogRuntime {
     state: SharedState,
     input_report_char_paths: HashMap<u8, Path<'static>>,
     adapter_path: Path<'static>,
-    connected: Arc<AtomicBool>,
+    connected_devices: Arc<Mutex<HashSet<String>>>,
+    bluez_lost: Arc<AtomicBool>,
     adv_needs_retry: Arc<AtomicBool>,
 }
 
@@ -201,7 +202,7 @@ impl HogRuntime {
             "hidd: opened system D-Bus connection (unique name: {:?})",
             conn.unique_name()
         );
-        let adapter_path = find_adapter_path(&conn)?;
+        let adapter_path = find_adapter_path_with_retry(&conn)?;
         eprintln!("hidd: using BlueZ adapter {adapter_path}");
         configure_adapter_for_hog(&conn, &adapter_path, cfg)?;
         let app_path = dbus_path(APP_PATH)?;
@@ -507,11 +508,20 @@ impl HogRuntime {
         // cleared when we re-register. Starts true so the first disconnect
         // after initial pairing triggers re-registration.
         let had_stable_connection = Arc::new(AtomicBool::new(true));
-        let connected = Arc::new(AtomicBool::new(false));
-        let connected_for_closure = Arc::clone(&connected);
+        // Object paths of currently connected devices. Multiple bonded hosts
+        // can connect/disconnect independently; report publishing is gated on
+        // this set being non-empty and advertising resumes only once it
+        // becomes empty again.
+        let connected_devices: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let connected_for_closure = Arc::clone(&connected_devices);
         let disconnect_state = Arc::clone(&state);
         let adv_needs_retry = Arc::new(AtomicBool::new(false));
         let adv_needs_retry_for_closure = Arc::clone(&adv_needs_retry);
+        // Serial of the most recent fire-and-forget RegisterAdvertisement sent
+        // from the disconnect handler (0 = none in flight). The async error
+        // handler uses it to recognize a failed registration and retry.
+        let adv_register_serial = Arc::new(AtomicU32::new(0));
+        let adv_serial_for_disconnect = Arc::clone(&adv_register_serial);
         let mut device_prop_rule =
             PropertiesPropertiesChanged::match_rule(None, None).static_clone();
         device_prop_rule.sender = Some(
@@ -546,23 +556,44 @@ impl HogRuntime {
                         {
                             let is_connected = connected_variant.as_i64() == Some(1);
                             if is_connected {
-                                connected_for_closure.store(true, Ordering::Release);
+                                let first_connection = match connected_for_closure.lock() {
+                                    Ok(mut set) => {
+                                        let was_empty = set.is_empty();
+                                        set.insert(obj_path.clone());
+                                        was_empty
+                                    }
+                                    Err(_) => false,
+                                };
                                 // Restore notifying flags for bonded reconnections.
                                 // Bonded hosts cache CCCD subscriptions and don't
-                                // re-call StartNotify after reconnect. The connected
-                                // gate (Fix 3) prevents sending while disconnected,
-                                // so it's safe to assume subscriptions persist.
-                                if let Ok(mut s) = disconnect_state.lock() {
-                                    for slot in s.input_reports.values_mut() {
-                                        slot.notifying = true;
+                                // re-call StartNotify after reconnect. Only done for
+                                // the first concurrent connection so a second host
+                                // joining doesn't clobber explicit StopNotify state.
+                                if first_connection {
+                                    if let Ok(mut s) = disconnect_state.lock() {
+                                        for slot in s.input_reports.values_mut() {
+                                            slot.notifying = true;
+                                        }
+                                        s.battery_notifying = true;
+                                        eprintln!("hidd: restored notifying flags on connect");
                                     }
-                                    s.battery_notifying = true;
-                                    eprintln!("hidd: restored notifying flags on connect");
                                 }
                                 eprintln!("hidd: device connected: {obj_path}");
                             } else {
-                                connected_for_closure.store(false, Ordering::Release);
-                                if had_stable_connection
+                                let all_disconnected = match connected_for_closure.lock() {
+                                    Ok(mut set) => {
+                                        set.remove(&obj_path);
+                                        set.is_empty()
+                                    }
+                                    Err(_) => true,
+                                };
+                                if !all_disconnected {
+                                    eprintln!(
+                                        "hidd: device disconnected: {obj_path} \
+                                         (other hosts still connected, not \
+                                         re-advertising)"
+                                    );
+                                } else if had_stable_connection
                                     .compare_exchange(
                                         true,
                                         false,
@@ -609,10 +640,14 @@ impl HogRuntime {
                                         &mut IterAppend::new(&mut reg),
                                     );
                                     match conn.send(reg) {
-                                        Ok(serial) => eprintln!(
-                                            "hidd: sent RegisterAdvertisement \
-                                             (serial={serial})"
-                                        ),
+                                        Ok(serial) => {
+                                            adv_serial_for_disconnect
+                                                .store(serial, Ordering::Release);
+                                            eprintln!(
+                                                "hidd: sent RegisterAdvertisement \
+                                                 (serial={serial})"
+                                            );
+                                        }
                                         Err(_) => {
                                             eprintln!(
                                                 "hidd: failed to send \
@@ -650,6 +685,7 @@ impl HogRuntime {
         let mut async_error_rule = MatchRule::new();
         async_error_rule.msg_type = Some(MessageType::Error);
         let adv_needs_retry_for_errors = Arc::clone(&adv_needs_retry);
+        let adv_serial_for_errors = Arc::clone(&adv_register_serial);
         conn.start_receive(
             async_error_rule,
             Box::new(move |mut msg, _| {
@@ -663,11 +699,46 @@ impl HogRuntime {
                     "hidd: D-Bus error reply (reply_serial={reply_serial}): \
                      {error_body}"
                 );
-                // If this looks like a failed advertisement-related reply,
-                // schedule a retry on the next process_pending_messages call.
-                if error_body.contains("dvertis") {
-                    eprintln!("hidd: advertisement error detected, will retry");
+                // If this is the reply to the in-flight fire-and-forget
+                // RegisterAdvertisement from the disconnect handler, schedule
+                // a retry on the next process_pending_messages call.
+                if reply_serial != 0
+                    && adv_serial_for_errors
+                        .compare_exchange(reply_serial, 0, Ordering::AcqRel, Ordering::Relaxed)
+                        .is_ok()
+                {
+                    eprintln!("hidd: RegisterAdvertisement failed, will retry");
                     adv_needs_retry_for_errors.store(true, Ordering::Release);
+                }
+                true
+            }),
+        );
+
+        // Detect bluetoothd restarts. All our registrations (GATT application,
+        // advertisement, agent) die with the old bluetoothd instance, so the
+        // recovery path is to exit and let the service supervisor restart hidd
+        // for a clean re-registration; this flag tells the report loop to do so.
+        let bluez_lost = Arc::new(AtomicBool::new(false));
+        let bluez_lost_for_closure = Arc::clone(&bluez_lost);
+        let name_owner_rule = MatchRule::new_signal("org.freedesktop.DBus", "NameOwnerChanged");
+        conn.add_match_no_cb(&format!(
+            "{},arg0='{}'",
+            name_owner_rule.match_str(),
+            BLUEZ_SERVICE
+        ))
+        .map_err(|e| anyhow!("failed to add D-Bus match for NameOwnerChanged: {e}"))?;
+        conn.start_receive(
+            name_owner_rule,
+            Box::new(move |msg, _| {
+                let (name, old_owner, new_owner) = msg.get3::<String, String, String>();
+                if name.as_deref() == Some(BLUEZ_SERVICE) {
+                    eprintln!(
+                        "hidd: org.bluez owner changed ({:?} -> {:?}); BlueZ \
+                         registrations are gone, requesting restart",
+                        old_owner.unwrap_or_default(),
+                        new_owner.unwrap_or_default()
+                    );
+                    bluez_lost_for_closure.store(true, Ordering::Release);
                 }
                 true
             }),
@@ -682,7 +753,8 @@ impl HogRuntime {
             state,
             input_report_char_paths,
             adapter_path,
-            connected,
+            connected_devices,
+            bluez_lost,
             adv_needs_retry,
         })
     }
@@ -691,8 +763,29 @@ impl HogRuntime {
         &self.adapter_path
     }
 
+    /// True while at least one host is connected.
+    fn any_connected(&self) -> bool {
+        self.connected_devices
+            .lock()
+            .map(|set| !set.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// True once bluetoothd has restarted, which invalidates all of our
+    /// registrations. The caller should exit so the service supervisor
+    /// restarts hidd with a clean registration.
+    pub fn bluez_lost(&self) -> bool {
+        self.bluez_lost.load(Ordering::Acquire)
+    }
+
+    /// Drive pending D-Bus traffic (GATT reads/writes, signals) without
+    /// publishing a report. Must be called regularly even when idle.
+    pub fn pump(&self) -> Result<()> {
+        self.process_pending_messages()
+    }
+
     pub fn publish_input_report(&self, report: &[u8]) -> Result<()> {
-        if !self.connected.load(Ordering::Acquire) {
+        if !self.any_connected() {
             return self.process_pending_messages();
         }
         let (report_id, ble_payload) = ble_input_payload_from_uhid(report)?;
@@ -788,6 +881,28 @@ impl Drop for HogRuntime {
         }
         eprintln!("hidd: HogRuntime shutdown complete");
     }
+}
+
+/// Find the BlueZ adapter, retrying for up to ~30 s. hidd may be (re)started
+/// while bluetoothd is itself still coming up (at boot, or after a supervisor
+/// restart following a BlueZ restart), so a transient "no adapter yet" must
+/// not be fatal.
+fn find_adapter_path_with_retry(conn: &SyncConnection) -> Result<Path<'static>> {
+    const ATTEMPTS: u32 = 30;
+    let mut last_err = anyhow!("no BlueZ adapter found");
+    for attempt in 1..=ATTEMPTS {
+        match find_adapter_path(conn) {
+            Ok(path) => return Ok(path),
+            Err(err) => {
+                eprintln!("hidd: adapter not available (attempt {attempt}/{ATTEMPTS}): {err}");
+                last_err = err;
+            }
+        }
+        if attempt < ATTEMPTS {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
+    Err(last_err)
 }
 
 fn find_adapter_path(conn: &SyncConnection) -> Result<Path<'static>> {

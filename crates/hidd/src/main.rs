@@ -34,6 +34,44 @@ const UHID_ERR_NOT_SUPPORTED: u16 = 95;
 
 const BUS_BLUETOOTH: u16 = 0x05;
 
+/// How often an unchanged input report is still re-notified over BLE. This
+/// keepalive lets a newly (re)connected host learn the current state without
+/// waiting for an input change.
+const PUBLISH_KEEPALIVE: Duration = Duration::from_secs(1);
+
+/// Gates BLE notifications so unchanged reports are not re-sent every tick.
+/// Without this, the report loop saturates the BLE connection interval with
+/// identical notifications even while the controller is idle.
+struct PublishGate {
+    keepalive: Duration,
+    last_payload: Option<Vec<u8>>,
+    last_sent: Option<Instant>,
+}
+
+impl PublishGate {
+    fn new(keepalive: Duration) -> Self {
+        Self {
+            keepalive,
+            last_payload: None,
+            last_sent: None,
+        }
+    }
+
+    fn should_publish(&mut self, payload: &[u8], now: Instant) -> bool {
+        let changed = self.last_payload.as_deref() != Some(payload);
+        let keepalive_due = self
+            .last_sent
+            .is_none_or(|sent| now.duration_since(sent) >= self.keepalive);
+        if changed || keepalive_due {
+            self.last_payload = Some(payload.to_vec());
+            self.last_sent = Some(now);
+            true
+        } else {
+            false
+        }
+    }
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -142,11 +180,21 @@ fn run_daemon_live(cfg: &HidConfig, mapping_config_path: &str) -> Result<()> {
 
     let period = Duration::from_nanos(1_000_000_000u64 / u64::from(cfg.report.rate_hz));
     let mut next_tick = Instant::now();
+    let mut gate = PublishGate::new(PUBLISH_KEEPALIVE);
 
     loop {
+        if hog.bluez_lost() {
+            return Err(anyhow!(
+                "BlueZ restarted; exiting for clean re-registration"
+            ));
+        }
         let report = reader.current_report();
         let report_bytes = report.to_bytes();
-        hog.publish_input_report(&report_bytes)?;
+        if gate.should_publish(&report_bytes, Instant::now()) {
+            hog.publish_input_report(&report_bytes)?;
+        } else {
+            hog.pump()?;
+        }
         next_tick += period;
 
         let now = Instant::now();
@@ -184,12 +232,22 @@ fn run_daemon_pattern(cfg: &HidConfig) -> Result<()> {
     let period = Duration::from_nanos(1_000_000_000u64 / u64::from(cfg.report.rate_hz));
     let mut pattern = PatternState::new(&cfg.pattern);
     let mut next_tick = Instant::now();
+    let mut gate = PublishGate::new(PUBLISH_KEEPALIVE);
 
     loop {
+        if hog.bluez_lost() {
+            return Err(anyhow!(
+                "BlueZ restarted; exiting for clean re-registration"
+            ));
+        }
         let report = pattern.next_report();
         let report_bytes = report.to_bytes();
         uhid.send_input_report(&report_bytes)?;
-        hog.publish_input_report(&report_bytes)?;
+        if gate.should_publish(&report_bytes, Instant::now()) {
+            hog.publish_input_report(&report_bytes)?;
+        } else {
+            hog.pump()?;
+        }
         next_tick += period;
 
         let now = Instant::now();
@@ -575,8 +633,42 @@ fn apply_axis_value(report: &mut InputReport, axis: AxisName, value: i16) {
 
 #[cfg(test)]
 mod tests {
-    use super::PatternState;
+    use super::{PatternState, PublishGate};
     use common::config::{AxisName, PatternConfig};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn publish_gate_publishes_first_report() {
+        let mut gate = PublishGate::new(Duration::from_secs(1));
+        assert!(gate.should_publish(&[1, 2, 3], Instant::now()));
+    }
+
+    #[test]
+    fn publish_gate_suppresses_unchanged_within_keepalive() {
+        let mut gate = PublishGate::new(Duration::from_secs(1));
+        let t0 = Instant::now();
+        assert!(gate.should_publish(&[1, 2, 3], t0));
+        assert!(!gate.should_publish(&[1, 2, 3], t0 + Duration::from_millis(8)));
+        assert!(!gate.should_publish(&[1, 2, 3], t0 + Duration::from_millis(999)));
+    }
+
+    #[test]
+    fn publish_gate_publishes_on_change() {
+        let mut gate = PublishGate::new(Duration::from_secs(1));
+        let t0 = Instant::now();
+        assert!(gate.should_publish(&[1, 2, 3], t0));
+        assert!(gate.should_publish(&[1, 2, 4], t0 + Duration::from_millis(8)));
+        assert!(!gate.should_publish(&[1, 2, 4], t0 + Duration::from_millis(16)));
+    }
+
+    #[test]
+    fn publish_gate_keepalive_resends_unchanged() {
+        let mut gate = PublishGate::new(Duration::from_secs(1));
+        let t0 = Instant::now();
+        assert!(gate.should_publish(&[1, 2, 3], t0));
+        assert!(gate.should_publish(&[1, 2, 3], t0 + Duration::from_secs(1)));
+        assert!(!gate.should_publish(&[1, 2, 3], t0 + Duration::from_millis(1500)));
+    }
 
     #[test]
     fn button_toggle_changes_state_over_time() {
