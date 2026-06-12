@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use common::config::{AxisName, HidConfig, PatternConfig, DEFAULT_HID_CONFIG_PATH};
-use common::hid::{InputReport, OutputReport};
+use common::hid::{InputReport, OutputReport, XBOX_STATUS_INPUT_REPORT_ID};
 
+mod battery;
 mod hog;
 use hog::HogRuntime;
 
@@ -44,6 +45,51 @@ const PUBLISH_KEEPALIVE: Duration = Duration::from_secs(1);
 /// supervisor restarts us cleanly — after this many consecutive failures
 /// (~200 ms at 125 Hz).
 const MAX_CONSECUTIVE_PUBLISH_FAILURES: u32 = 25;
+
+/// How often the sysfs battery capacity is re-read.
+const BATTERY_POLL_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Polls the battery and pushes changes to hosts: the GATT Battery Level
+/// characteristic plus HID input report 0x04 (Battery Strength, 0..255).
+struct BatteryReporter {
+    source: battery::BatterySource,
+    next_check: Instant,
+    last_capacity: Option<u8>,
+}
+
+impl BatteryReporter {
+    fn new() -> Self {
+        Self {
+            source: battery::BatterySource::discover(),
+            next_check: Instant::now(),
+            last_capacity: None,
+        }
+    }
+
+    fn tick(&mut self, hog: &HogRuntime, now: Instant) {
+        if now < self.next_check {
+            return;
+        }
+        self.next_check = now + BATTERY_POLL_INTERVAL;
+        let Some(capacity) = self.source.capacity() else {
+            return;
+        };
+        if self.last_capacity == Some(capacity) {
+            return;
+        }
+        self.last_capacity = Some(capacity);
+        if let Err(err) = hog.set_battery_level(capacity) {
+            eprintln!("hidd: failed to update GATT battery level: {err}");
+        }
+        let status = [
+            XBOX_STATUS_INPUT_REPORT_ID,
+            battery::capacity_to_battery_strength(capacity),
+        ];
+        if let Err(err) = hog.publish_input_report(&status) {
+            eprintln!("hidd: failed to publish battery status report: {err}");
+        }
+    }
+}
 
 /// Gates BLE notifications so unchanged reports are not re-sent every tick.
 /// Without this, the report loop saturates the BLE connection interval with
@@ -225,6 +271,7 @@ fn run_daemon_live(cfg: &HidConfig, mapping_config_path: &str) -> Result<()> {
     let mut next_tick = Instant::now();
     let mut gate = PublishGate::new(PUBLISH_KEEPALIVE);
     let mut publish_failures = 0u32;
+    let mut battery = BatteryReporter::new();
 
     loop {
         if hog.bluez_lost() {
@@ -240,6 +287,7 @@ fn run_daemon_live(cfg: &HidConfig, mapping_config_path: &str) -> Result<()> {
             hog.pump()
         };
         absorb_publish_error(result, &mut gate, &mut publish_failures)?;
+        battery.tick(&hog, Instant::now());
         next_tick += period;
 
         let now = Instant::now();
@@ -279,6 +327,7 @@ fn run_daemon_pattern(cfg: &HidConfig) -> Result<()> {
     let mut next_tick = Instant::now();
     let mut gate = PublishGate::new(PUBLISH_KEEPALIVE);
     let mut publish_failures = 0u32;
+    let mut battery = BatteryReporter::new();
 
     loop {
         if hog.bluez_lost() {
@@ -295,6 +344,7 @@ fn run_daemon_pattern(cfg: &HidConfig) -> Result<()> {
             hog.pump()
         };
         absorb_publish_error(result, &mut gate, &mut publish_failures)?;
+        battery.tick(&hog, Instant::now());
         next_tick += period;
 
         let now = Instant::now();

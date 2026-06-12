@@ -785,10 +785,9 @@ impl HogRuntime {
     }
 
     pub fn publish_input_report(&self, report: &[u8]) -> Result<()> {
-        if !self.any_connected() {
-            return self.process_pending_messages();
-        }
         let (report_id, ble_payload) = ble_input_payload_from_uhid(report)?;
+        // Always store the latest value so a host that connects later reads
+        // current state via ReadValue, even if nobody is notified right now.
         let notifying = {
             let mut state = self
                 .state
@@ -803,7 +802,7 @@ impl HogRuntime {
             slot.notifying
         };
 
-        if !notifying {
+        if !notifying || !self.any_connected() {
             return self.process_pending_messages();
         }
 
@@ -830,6 +829,42 @@ impl HogRuntime {
             .send(signal.to_emit_message(input_report_char_path))
             .map_err(|_| anyhow!("failed to emit input report notification"))?;
         self.process_pending_messages()?;
+        Ok(())
+    }
+
+    /// Update the GATT Battery Level characteristic (0x2A19) and notify
+    /// subscribed hosts if the level changed.
+    pub fn set_battery_level(&self, level: u8) -> Result<()> {
+        let level = level.min(100);
+        let notifying = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| anyhow!("failed to lock HOG state"))?;
+            if state.battery_level == level {
+                return Ok(());
+            }
+            state.battery_level = level;
+            state.battery_notifying
+        };
+
+        if !notifying || !self.any_connected() {
+            return Ok(());
+        }
+
+        let mut changed: PropMap = HashMap::new();
+        changed.insert(
+            "Value".to_string(),
+            Variant(Box::new(vec![level]) as Box<dyn RefArg>),
+        );
+        let signal = PropertiesPropertiesChanged {
+            interface_name: GATT_CHARACTERISTIC_IFACE.to_string(),
+            changed_properties: changed,
+            invalidated_properties: Vec::new(),
+        };
+        self.conn
+            .send(signal.to_emit_message(&dbus_path(BATTERY_LEVEL_CHAR_PATH)?))
+            .map_err(|_| anyhow!("failed to emit battery level notification"))?;
         Ok(())
     }
 
