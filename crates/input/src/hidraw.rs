@@ -17,6 +17,7 @@ const STEAM_DECK_PID: u16 = 0x1205;
 // HID command IDs from hid-steam.c
 const ID_CLEAR_DIGITAL_MAPPINGS: u8 = 0x81;
 const ID_SET_SETTINGS_VALUES: u8 = 0x87;
+const ID_TRIGGER_RUMBLE_CMD: u8 = 0xEB;
 
 // Setting register IDs (sequential enum starting at 0 in kernel)
 const SETTING_LEFT_TRACKPAD_MODE: u8 = 7;
@@ -109,6 +110,28 @@ pub fn discover_deck_hidraw() -> Result<PathBuf, String> {
     Ok(candidates.last().unwrap().0.clone())
 }
 
+/// Build the rumble feature report matching the kernel's
+/// `steam_haptic_rumble` (struct steam_haptic_rumble_report): command 0xEB,
+/// payload length 9, then position, intensity (LE16), left/right speed
+/// (LE16, 0..65535), left/right gain. The kernel driver uses intensity=0,
+/// left_gain=2, right_gain=0 for force-feedback rumble; left is the strong
+/// (low-frequency) motor, right the weak one.
+fn rumble_report(left_speed: u16, right_speed: u16) -> [u8; 11] {
+    [
+        ID_TRIGGER_RUMBLE_CMD,
+        9, // payload length
+        0, // position
+        0, // intensity lo
+        0, // intensity hi
+        (left_speed & 0xFF) as u8,
+        (left_speed >> 8) as u8,
+        (right_speed & 0xFF) as u8,
+        (right_speed >> 8) as u8,
+        2, // left gain
+        0, // right gain
+    ]
+}
+
 impl HidrawDevice {
     pub fn open(path: &Path) -> Result<Self, String> {
         let file = fs::File::options()
@@ -117,6 +140,22 @@ impl HidrawDevice {
             .open(path)
             .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
         Ok(Self { file })
+    }
+
+    /// Duplicate the underlying file descriptor, e.g. for a rumble handle
+    /// that is used concurrently with the read loop.
+    pub fn try_clone(&self) -> Result<Self, String> {
+        let file = self
+            .file
+            .try_clone()
+            .map_err(|e| format!("cannot clone hidraw fd: {e}"))?;
+        Ok(Self { file })
+    }
+
+    /// Drive the Deck's haptic rumble motors. Speeds are 0..65535;
+    /// 0/0 stops the rumble.
+    pub fn send_rumble(&self, left_speed: u16, right_speed: u16) -> Result<(), String> {
+        self.send_feature_report(&rumble_report(left_speed, right_speed))
     }
 
     /// Send a HID feature report (SET_REPORT) to the controller.
@@ -203,5 +242,25 @@ impl HidrawDevice {
         }
 
         self.file.read(buf)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rumble_report_matches_kernel_layout() {
+        // struct steam_haptic_rumble_report from hid-steam.c:
+        // [cmd, len, position, intensity_lo, intensity_hi,
+        //  left_lo, left_hi, right_lo, right_hi, left_gain, right_gain]
+        let report = rumble_report(0x1234, 0xABCD);
+        assert_eq!(report, [0xEB, 9, 0, 0, 0, 0x34, 0x12, 0xCD, 0xAB, 2, 0]);
+    }
+
+    #[test]
+    fn rumble_report_stop_is_all_zero_speeds() {
+        let report = rumble_report(0, 0);
+        assert_eq!(report[5..9], [0, 0, 0, 0]);
     }
 }

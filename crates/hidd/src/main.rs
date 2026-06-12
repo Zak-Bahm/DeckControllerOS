@@ -4,6 +4,8 @@ use std::env;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,7 +15,7 @@ use common::hid::{InputReport, OutputReport, XBOX_STATUS_INPUT_REPORT_ID};
 
 mod battery;
 mod hog;
-use hog::HogRuntime;
+use hog::{HogRuntime, OutputSink};
 
 const DEV_UHID: &str = "/dev/uhid";
 const UHID_DESTROY: u32 = 1;
@@ -48,6 +50,11 @@ const MAX_CONSECUTIVE_PUBLISH_FAILURES: u32 = 25;
 
 /// How often the sysfs battery capacity is re-read.
 const BATTERY_POLL_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Map an Xbox rumble magnitude (0..=100) to a Deck haptic speed (0..=65535).
+fn xbox_magnitude_to_deck_speed(magnitude: u8) -> u16 {
+    (u32::from(magnitude.min(100)) * 65535 / 100) as u16
+}
 
 /// Polls the battery and pushes changes to hosts: the GATT Battery Level
 /// characteristic plus HID input report 0x04 (Battery Strength, 0..255).
@@ -251,9 +258,28 @@ fn run_self_test(cfg: &HidConfig) -> Result<()> {
 fn run_daemon_live(cfg: &HidConfig, mapping_config_path: &str) -> Result<()> {
     let mapping = input::MappingConfig::from_file(mapping_config_path)
         .map_err(|e| anyhow!("mapping config: {e}"))?;
-    let reader = input::InputReader::new(mapping).map_err(|e| anyhow!("{e}"))?;
+    let reader = Arc::new(input::InputReader::new(mapping).map_err(|e| anyhow!("{e}"))?);
 
-    let hog = HogRuntime::register(cfg)?;
+    // Forward host rumble (HID output report 0x03) to the Deck's haptic
+    // motors: strong (low-frequency) -> left, weak -> right. The Deck
+    // haptics have no trigger motors or scheduling, so trigger magnitudes
+    // and duration/start_delay/loop_count are ignored — hosts re-send
+    // rumble packets continuously, which drives the motors directly.
+    let rumble_reader = Arc::clone(&reader);
+    let warned_ignored_fields = AtomicBool::new(false);
+    let sink = OutputSink(Arc::new(move |out| {
+        let unsupported = out.left_trigger_magnitude > 0 || out.right_trigger_magnitude > 0;
+        if unsupported && !warned_ignored_fields.swap(true, Ordering::Relaxed) {
+            eprintln!("hidd: trigger rumble not supported by Deck haptics; ignoring (logged once)");
+        }
+        let left = xbox_magnitude_to_deck_speed(out.strong_motor_magnitude);
+        let right = xbox_magnitude_to_deck_speed(out.weak_motor_magnitude);
+        if let Err(e) = rumble_reader.rumble(left, right) {
+            eprintln!("hidd: rumble forward failed: {e}");
+        }
+    }));
+
+    let hog = HogRuntime::register(cfg, Some(sink))?;
 
     println!(
         "hidd started: name=\"{}\" profile={} vid=0x{:04x} pid=0x{:04x} version=0x{:04x} rate={}Hz mapping={}",
@@ -305,7 +331,8 @@ fn run_daemon_pattern(cfg: &HidConfig) -> Result<()> {
     let mut uhid = UhidDevice::open()?;
     uhid.create(cfg)?;
     uhid.start_event_drain()?;
-    let hog = HogRuntime::register(cfg)?;
+    // No reader in pattern mode, so output reports stay drop-and-log.
+    let hog = HogRuntime::register(cfg, None)?;
 
     println!(
         "hidd started: name=\"{}\" profile={} vid=0x{:04x} pid=0x{:04x} version=0x{:04x} rate={}Hz pattern={}",
@@ -731,8 +758,8 @@ fn apply_axis_value(report: &mut InputReport, axis: AxisName, value: i16) {
 #[cfg(test)]
 mod tests {
     use super::{
-        absorb_publish_error, PatternState, PublishGate, MAX_CONSECUTIVE_PUBLISH_FAILURES,
-        PUBLISH_KEEPALIVE,
+        absorb_publish_error, xbox_magnitude_to_deck_speed, PatternState, PublishGate,
+        MAX_CONSECUTIVE_PUBLISH_FAILURES, PUBLISH_KEEPALIVE,
     };
     use anyhow::anyhow;
     use common::config::{AxisName, PatternConfig};
@@ -769,6 +796,15 @@ mod tests {
         assert!(gate.should_publish(&[1, 2, 3], t0));
         assert!(gate.should_publish(&[1, 2, 3], t0 + Duration::from_secs(1)));
         assert!(!gate.should_publish(&[1, 2, 3], t0 + Duration::from_millis(1500)));
+    }
+
+    #[test]
+    fn rumble_magnitude_scaling() {
+        assert_eq!(xbox_magnitude_to_deck_speed(0), 0);
+        assert_eq!(xbox_magnitude_to_deck_speed(50), 32767);
+        assert_eq!(xbox_magnitude_to_deck_speed(100), 65535);
+        // Out-of-range magnitudes are clamped, not wrapped.
+        assert_eq!(xbox_magnitude_to_deck_speed(255), 65535);
     }
 
     #[test]

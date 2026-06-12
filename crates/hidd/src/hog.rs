@@ -153,16 +153,36 @@ struct GattCharacteristicData {
     state: SharedState,
 }
 
+/// Callback invoked with each parsed HID output report (rumble) written by a
+/// host. `None` keeps the previous drop-and-log behavior (pattern mode).
+#[derive(Clone)]
+pub struct OutputSink(pub Arc<dyn Fn(OutputReport) + Send + Sync>);
+
+impl std::fmt::Debug for OutputSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OutputSink")
+    }
+}
+
 #[derive(Debug, Clone)]
 enum CharacteristicKind {
     ProtocolMode,
     ReportMap(Vec<u8>),
-    HidInfo { country_code: u8 },
+    HidInfo {
+        country_code: u8,
+    },
     ControlPoint,
-    InputReport { report_id: u8 },
-    OutputReport { report_id: u8 },
+    InputReport {
+        report_id: u8,
+    },
+    OutputReport {
+        report_id: u8,
+        sink: Option<OutputSink>,
+    },
     BatteryLevel,
-    PnpId { value: [u8; 7] },
+    PnpId {
+        value: [u8; 7],
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -196,7 +216,7 @@ pub struct HogRuntime {
 }
 
 impl HogRuntime {
-    pub fn register(cfg: &HidConfig) -> Result<Self> {
+    pub fn register(cfg: &HidConfig, output_sink: Option<OutputSink>) -> Result<Self> {
         let conn = SyncConnection::new_system().map_err(|e| anyhow!("system bus: {e}"))?;
         eprintln!(
             "hidd: opened system D-Bus connection (unique name: {:?})",
@@ -339,6 +359,7 @@ impl HogRuntime {
                 descriptors: vec![dbus_path(HID_OUTPUT_REPORT_REF_DESC_PATH)?],
                 kind: CharacteristicKind::OutputReport {
                     report_id: XBOX_OUTPUT_REPORT_ID,
+                    sink: output_sink,
                 },
                 state: Arc::clone(&state),
             },
@@ -1296,7 +1317,7 @@ fn register_characteristic_iface(cr: &mut Crossroads) -> IfaceToken<GattCharacte
                             .value
                             .clone()
                     }
-                    CharacteristicKind::OutputReport { report_id } => {
+                    CharacteristicKind::OutputReport { report_id, .. } => {
                         let state = data
                             .state
                             .lock()
@@ -1356,23 +1377,29 @@ fn register_characteristic_iface(cr: &mut Crossroads) -> IfaceToken<GattCharacte
                     state.control_point = value[0];
                     Ok(())
                 }
-                CharacteristicKind::OutputReport { report_id } => {
+                CharacteristicKind::OutputReport { report_id, sink } => {
                     let normalized = normalize_ble_output_value(*report_id, &value);
-                    let mut state = data
-                        .state
-                        .lock()
-                        .map_err(|_| MethodErr::failed(&"failed to lock HOG state"))?;
-                    state
-                        .output_reports
-                        .insert(*report_id, normalized.characteristic_value);
+                    {
+                        let mut state = data
+                            .state
+                            .lock()
+                            .map_err(|_| MethodErr::failed(&"failed to lock HOG state"))?;
+                        state
+                            .output_reports
+                            .insert(*report_id, normalized.characteristic_value);
+                    }
                     if let Some(parsed) = OutputReport::parse(&normalized.parser_value) {
-                        eprintln!(
-                            "hidd: dropped BLE output report rumble={{lt:{}, rt:{}, weak:{}, strong:{}}}",
-                            parsed.left_trigger_magnitude,
-                            parsed.right_trigger_magnitude,
-                            parsed.weak_motor_magnitude,
-                            parsed.strong_motor_magnitude
-                        );
+                        if let Some(sink) = sink {
+                            (sink.0)(parsed);
+                        } else {
+                            eprintln!(
+                                "hidd: dropped BLE output report rumble={{lt:{}, rt:{}, weak:{}, strong:{}}}",
+                                parsed.left_trigger_magnitude,
+                                parsed.right_trigger_magnitude,
+                                parsed.weak_motor_magnitude,
+                                parsed.strong_motor_magnitude
+                            );
+                        }
                     } else {
                         let report_id = normalized.parser_value.first().copied().unwrap_or(0);
                         eprintln!(

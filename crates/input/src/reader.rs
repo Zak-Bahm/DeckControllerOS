@@ -15,8 +15,13 @@ use std::time::Duration;
 pub struct InputReader {
     state: Arc<Mutex<InputReport>>,
     running: Arc<AtomicBool>,
+    rumble: Arc<Mutex<HidrawDevice>>,
     _thread: thread::JoinHandle<()>,
 }
+
+/// Consecutive hidraw read errors before the device is assumed gone and the
+/// read loop switches to rediscover/reopen (each error sleeps 10 ms).
+const MAX_CONSECUTIVE_READ_ERRORS: u32 = 50;
 
 /// Axis normalization config extracted from MappingConfig, keyed by axis name.
 struct AxisConfig {
@@ -44,16 +49,25 @@ impl InputReader {
 
         let state = Arc::new(Mutex::new(InputReport::default()));
         let running = Arc::new(AtomicBool::new(true));
+        let rumble = Arc::new(Mutex::new(dev.try_clone()?));
 
         let thread_state = Arc::clone(&state);
         let thread_running = Arc::clone(&running);
+        let thread_rumble = Arc::clone(&rumble);
         let handle = thread::spawn(move || {
-            hidraw_loop(dev, axis_config, thread_state, thread_running);
+            hidraw_loop(
+                dev,
+                axis_config,
+                thread_state,
+                thread_running,
+                thread_rumble,
+            );
         });
 
         Ok(Self {
             state,
             running,
+            rumble,
             _thread: handle,
         })
     }
@@ -61,6 +75,15 @@ impl InputReader {
     /// Returns the latest mapped input state as an HID `InputReport`.
     pub fn current_report(&self) -> InputReport {
         *self.state.lock().unwrap()
+    }
+
+    /// Drive the Deck's haptic rumble motors. Speeds are 0..65535;
+    /// left is the strong (low-frequency) motor, right the weak one.
+    pub fn rumble(&self, left_speed: u16, right_speed: u16) -> Result<(), String> {
+        self.rumble
+            .lock()
+            .map_err(|_| "rumble handle poisoned".to_string())?
+            .send_rumble(left_speed, right_speed)
     }
 }
 
@@ -94,29 +117,90 @@ fn hidraw_loop(
     axis_config: AxisConfig,
     state: Arc<Mutex<InputReport>>,
     running: Arc<AtomicBool>,
+    rumble: Arc<Mutex<HidrawDevice>>,
 ) {
     let mut buf = [0u8; REPORT_SIZE];
+    let mut consecutive_errors = 0u32;
 
     while running.load(Ordering::Relaxed) {
         match dev.read_report_timeout(&mut buf, 100) {
-            Ok(0) => continue, // timeout, check running flag
+            Ok(0) => {
+                consecutive_errors = 0;
+                continue; // timeout, check running flag
+            }
             Ok(n) if n >= 56 => {
+                consecutive_errors = 0;
                 // Validate report header: data[0]=0x01, data[1]=0x00, data[2]=type
                 if buf[0] == 0x01 && buf[1] == 0x00 && buf[2] == DECK_REPORT_TYPE {
                     let report = parse_deck_report(&buf, &axis_config);
                     *state.lock().unwrap() = report;
                 }
             }
-            Ok(_) => {} // short read, ignore
+            Ok(_) => {
+                consecutive_errors = 0; // short read, ignore
+            }
             Err(e) => {
                 if !running.load(Ordering::Relaxed) {
                     break;
                 }
-                eprintln!("input: hidraw read error: {e}");
+                consecutive_errors += 1;
+                if consecutive_errors == 1 {
+                    eprintln!("input: hidraw read error: {e}");
+                }
+                if consecutive_errors >= MAX_CONSECUTIVE_READ_ERRORS {
+                    eprintln!("input: hidraw device lost; rediscovering");
+                    // Neutral state so the host doesn't see stuck inputs.
+                    *state.lock().unwrap() = InputReport::default();
+                    match reopen_deck_hidraw(&running, &rumble) {
+                        Some(new_dev) => {
+                            dev = new_dev;
+                            consecutive_errors = 0;
+                        }
+                        None => break, // shutting down
+                    }
+                    continue;
+                }
                 thread::sleep(Duration::from_millis(10));
             }
         }
     }
+}
+
+/// Rediscover and reopen the Deck hidraw device with 1 s backoff until it
+/// comes back or shutdown is requested. On success the shared rumble handle
+/// is refreshed to point at the new device.
+fn reopen_deck_hidraw(
+    running: &AtomicBool,
+    rumble: &Arc<Mutex<HidrawDevice>>,
+) -> Option<HidrawDevice> {
+    while running.load(Ordering::Relaxed) {
+        match try_open_deck() {
+            Ok(dev) => {
+                match dev.try_clone() {
+                    Ok(clone) => {
+                        if let Ok(mut handle) = rumble.lock() {
+                            *handle = clone;
+                        }
+                    }
+                    Err(e) => eprintln!("input: cannot refresh rumble handle: {e}"),
+                }
+                return Some(dev);
+            }
+            Err(e) => {
+                eprintln!("input: hidraw reopen failed: {e}; retrying in 1s");
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+    }
+    None
+}
+
+fn try_open_deck() -> Result<HidrawDevice, String> {
+    let path = hidraw::discover_deck_hidraw()?;
+    let dev = HidrawDevice::open(&path)?;
+    dev.disable_lizard_mode()?;
+    eprintln!("input: reopened hidraw {}", path.display());
+    Ok(dev)
 }
 
 /// Parse a raw 64-byte Deck HID report (type 0x09) into an Xbox InputReport.

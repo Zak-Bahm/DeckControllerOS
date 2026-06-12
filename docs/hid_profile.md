@@ -75,15 +75,24 @@ Byte layout:
 HID characteristics/descriptors use encrypted access flags (`encrypt-read`,
 `encrypt-write`, `encrypt-notify`) for bonded-link operation.
 
-## Output report handling (MVP)
+## Output report handling
 
-`hidd` now drains UHID events and handles host output traffic safely:
+BLE output report `0x03` (rumble) now drives the Deck's haptic motors in live
+mode: `hidd` parses the write and forwards it via a hidraw feature report
+(`0xEB`, the kernel `hid-steam.c` rumble command). Mapping:
 
-- `UHID_OUTPUT`: parsed/logged/dropped (no haptics implemented in MVP)
+- `strong_motor_magnitude` (0–100) → left (low-frequency) haptic speed (0–65535)
+- `weak_motor_magnitude` (0–100) → right haptic speed (0–65535)
+- Trigger magnitudes, `duration`, `start_delay`, and `loop_count` are ignored —
+  the Deck haptics have no trigger motors or effect scheduling; hosts re-send
+  rumble packets continuously, which drives the motors directly.
+
+In pattern mode (no `--mapping-config`) there is no reader, so output reports
+are parsed/logged/dropped as before. UHID traffic is drained safely:
+
+- `UHID_OUTPUT`: parsed/logged/dropped (UHID exists only in pattern mode)
 - `UHID_SET_REPORT`: acknowledged and dropped
 - `UHID_GET_REPORT`: replied with not-supported status
-
-This prevents daemon stalls from unread output traffic while keeping MVP scope.
 
 ## BLE pairing agent
 
