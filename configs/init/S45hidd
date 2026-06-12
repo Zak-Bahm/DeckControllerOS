@@ -31,9 +31,26 @@ start() {
 		echo "Bluetooth adapter not available after 10s; refusing to start $DAEMON" >&2
 		return 1
 	fi
+	# Run a tiny supervisor: restart hidd after 2s whenever it exits
+	# (transient BLE errors and bluetoothd restarts make hidd exit on
+	# purpose for a clean re-registration). The pidfile records the
+	# supervisor; its TERM trap kills the current hidd child so stop
+	# tears down both.
 	start-stop-daemon --start --background --make-pidfile \
 		--pidfile "$PIDFILE" \
-		--startas /bin/sh -- -c "exec $DAEMON_PATH --config $CONFIG --mapping-config $MAPPING_CONFIG >>$LOGFILE 2>&1"
+		--startas /bin/sh -- -c '
+			trap "kill \$child 2>/dev/null; exit 0" TERM
+			while :; do
+				"$1" --config "$2" --mapping-config "$3" >>"$4" 2>&1 &
+				child=$!
+				wait $child
+				code=$?
+				echo "hidd-supervisor: hidd exited with code $code; restarting in 2s" >>"$4"
+				sleep 2 &
+				child=$!
+				wait $child
+			done
+		' hidd-supervisor "$DAEMON_PATH" "$CONFIG" "$MAPPING_CONFIG" "$LOGFILE"
 	status=$?
 	if [ "$status" -eq 0 ]; then
 		echo "OK"

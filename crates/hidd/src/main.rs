@@ -39,6 +39,12 @@ const BUS_BLUETOOTH: u16 = 0x05;
 /// waiting for an input change.
 const PUBLISH_KEEPALIVE: Duration = Duration::from_secs(1);
 
+/// A single failed BLE publish is usually transient (e.g. a host briefly
+/// out of range or bluetoothd busy). Only give up — exiting so the init
+/// supervisor restarts us cleanly — after this many consecutive failures
+/// (~200 ms at 125 Hz).
+const MAX_CONSECUTIVE_PUBLISH_FAILURES: u32 = 25;
+
 /// Gates BLE notifications so unchanged reports are not re-sent every tick.
 /// Without this, the report loop saturates the BLE connection interval with
 /// identical notifications even while the controller is idle.
@@ -68,6 +74,43 @@ impl PublishGate {
             true
         } else {
             false
+        }
+    }
+
+    /// Forget the last published payload so the next tick republishes it.
+    /// Called after a failed publish so the report is not silently dropped.
+    fn reset(&mut self) {
+        self.last_payload = None;
+        self.last_sent = None;
+    }
+}
+
+/// Absorbs transient BLE publish/pump errors. Returns `Err` (exiting the
+/// daemon for a supervised restart) only once `MAX_CONSECUTIVE_PUBLISH_FAILURES`
+/// failures occur in a row; any success resets the counter.
+fn absorb_publish_error(
+    result: Result<()>,
+    gate: &mut PublishGate,
+    consecutive_failures: &mut u32,
+) -> Result<()> {
+    match result {
+        Ok(()) => {
+            *consecutive_failures = 0;
+            Ok(())
+        }
+        Err(err) => {
+            gate.reset();
+            *consecutive_failures += 1;
+            if *consecutive_failures == 1 {
+                eprintln!("hidd: BLE publish error (will retry): {err}");
+            }
+            if *consecutive_failures >= MAX_CONSECUTIVE_PUBLISH_FAILURES {
+                Err(anyhow!(
+                    "BLE publish failed {consecutive_failures} consecutive times; exiting: {err}"
+                ))
+            } else {
+                Ok(())
+            }
         }
     }
 }
@@ -181,6 +224,7 @@ fn run_daemon_live(cfg: &HidConfig, mapping_config_path: &str) -> Result<()> {
     let period = Duration::from_nanos(1_000_000_000u64 / u64::from(cfg.report.rate_hz));
     let mut next_tick = Instant::now();
     let mut gate = PublishGate::new(PUBLISH_KEEPALIVE);
+    let mut publish_failures = 0u32;
 
     loop {
         if hog.bluez_lost() {
@@ -190,11 +234,12 @@ fn run_daemon_live(cfg: &HidConfig, mapping_config_path: &str) -> Result<()> {
         }
         let report = reader.current_report();
         let report_bytes = report.to_bytes();
-        if gate.should_publish(&report_bytes, Instant::now()) {
-            hog.publish_input_report(&report_bytes)?;
+        let result = if gate.should_publish(&report_bytes, Instant::now()) {
+            hog.publish_input_report(&report_bytes)
         } else {
-            hog.pump()?;
-        }
+            hog.pump()
+        };
+        absorb_publish_error(result, &mut gate, &mut publish_failures)?;
         next_tick += period;
 
         let now = Instant::now();
@@ -233,6 +278,7 @@ fn run_daemon_pattern(cfg: &HidConfig) -> Result<()> {
     let mut pattern = PatternState::new(&cfg.pattern);
     let mut next_tick = Instant::now();
     let mut gate = PublishGate::new(PUBLISH_KEEPALIVE);
+    let mut publish_failures = 0u32;
 
     loop {
         if hog.bluez_lost() {
@@ -243,11 +289,12 @@ fn run_daemon_pattern(cfg: &HidConfig) -> Result<()> {
         let report = pattern.next_report();
         let report_bytes = report.to_bytes();
         uhid.send_input_report(&report_bytes)?;
-        if gate.should_publish(&report_bytes, Instant::now()) {
-            hog.publish_input_report(&report_bytes)?;
+        let result = if gate.should_publish(&report_bytes, Instant::now()) {
+            hog.publish_input_report(&report_bytes)
         } else {
-            hog.pump()?;
-        }
+            hog.pump()
+        };
+        absorb_publish_error(result, &mut gate, &mut publish_failures)?;
         next_tick += period;
 
         let now = Instant::now();
@@ -633,7 +680,11 @@ fn apply_axis_value(report: &mut InputReport, axis: AxisName, value: i16) {
 
 #[cfg(test)]
 mod tests {
-    use super::{PatternState, PublishGate};
+    use super::{
+        absorb_publish_error, PatternState, PublishGate, MAX_CONSECUTIVE_PUBLISH_FAILURES,
+        PUBLISH_KEEPALIVE,
+    };
+    use anyhow::anyhow;
     use common::config::{AxisName, PatternConfig};
     use std::time::{Duration, Instant};
 
@@ -668,6 +719,42 @@ mod tests {
         assert!(gate.should_publish(&[1, 2, 3], t0));
         assert!(gate.should_publish(&[1, 2, 3], t0 + Duration::from_secs(1)));
         assert!(!gate.should_publish(&[1, 2, 3], t0 + Duration::from_millis(1500)));
+    }
+
+    #[test]
+    fn absorb_publish_error_tolerates_transient_failures() {
+        let mut gate = PublishGate::new(PUBLISH_KEEPALIVE);
+        let mut failures = 0u32;
+
+        for _ in 0..MAX_CONSECUTIVE_PUBLISH_FAILURES - 1 {
+            assert!(absorb_publish_error(Err(anyhow!("boom")), &mut gate, &mut failures).is_ok());
+        }
+        // A success resets the counter.
+        assert!(absorb_publish_error(Ok(()), &mut gate, &mut failures).is_ok());
+        assert_eq!(failures, 0);
+    }
+
+    #[test]
+    fn absorb_publish_error_fails_at_threshold() {
+        let mut gate = PublishGate::new(PUBLISH_KEEPALIVE);
+        let mut failures = 0u32;
+
+        for _ in 0..MAX_CONSECUTIVE_PUBLISH_FAILURES - 1 {
+            assert!(absorb_publish_error(Err(anyhow!("boom")), &mut gate, &mut failures).is_ok());
+        }
+        assert!(absorb_publish_error(Err(anyhow!("boom")), &mut gate, &mut failures).is_err());
+    }
+
+    #[test]
+    fn publish_gate_resets_after_failed_publish() {
+        let mut gate = PublishGate::new(PUBLISH_KEEPALIVE);
+        let mut failures = 0u32;
+        let t0 = Instant::now();
+
+        assert!(gate.should_publish(&[1, 2, 3], t0));
+        // Publish failed: gate forgets the payload so the next tick retries.
+        assert!(absorb_publish_error(Err(anyhow!("boom")), &mut gate, &mut failures).is_ok());
+        assert!(gate.should_publish(&[1, 2, 3], t0 + Duration::from_millis(8)));
     }
 
     #[test]
