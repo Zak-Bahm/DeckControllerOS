@@ -155,6 +155,14 @@ Behavior:
   are printed on the host terminal running `dev_http_serve.sh` for real-time
   feedback while the script executes.
 
+## Debugging BLE Pairing Failures
+
+To reproduce and diagnose pairing failures (e.g. the controller disappears after
+a failed connect), use the dedicated two-sided capture harness — it records the
+HCI/SMP wire trace, verbose `bluetoothd -d`, `hidd.log`, and a 1 Hz adapter/device
+transition log from both the Deck and a Linux/BlueZ host. See
+[`bt_pairing_test.md`](bt_pairing_test.md).
+
 ## When You Still Need Rebuild + Reboot
 
 Perform `./scripts/build.sh` and reboot only for changes to:

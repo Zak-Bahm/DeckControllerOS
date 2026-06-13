@@ -164,5 +164,6 @@ cargo run -p controllerosctl -- hid self-test \
 | `docs/hid_profile.md` | Xbox One S 1708 BLE profile, report formats |
 | `docs/storage.md` | Bluetooth bond persistence, partition layout |
 | `docs/pairing.md` | BLE pairing flow and host-side steps |
+| `docs/bt_pairing_test.md` | End-to-end pairing test harness (deck + host capture) for debugging pairing failures |
 | `AGENTS.md` | AI execution rules: checkpoint progression, coding standards |
 | `project.md` | Project goals, constraints, architecture |
