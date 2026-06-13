@@ -75,7 +75,7 @@ The repo should be structured so an AI tool can begin work immediately:
 - `checkpoints/` (the 6 checkpoint files)
 - `docs/` (installation, pairing, mapping, storage, boot)
 - `scripts/` (build, release, helper scripts)
-- `src/` (Rust code; daemons + shared crates)
+- `crates/` (Rust code; daemons + shared crates)
 - `configs/` (BlueZ configs, boot configs, Buildroot configs)
 - `out/` (build artifacts; gitignored)
 

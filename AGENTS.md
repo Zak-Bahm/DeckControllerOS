@@ -61,7 +61,7 @@ For each checkpoint file:
 ## Repo conventions
 - Rust workspace at repo root with `Cargo.toml` (workspace).
 - Crates:
-  - `crates/inputd` (evdev discovery + input state)
+  - `crates/input` (evdev discovery + input state)
   - `crates/hidd` (UHID HID device + report writer daemon)
   - `crates/controllerosctl` (CLI tool for diagnostics/self-tests)
   - `crates/common` (shared types, mapping, config)

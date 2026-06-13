@@ -130,6 +130,31 @@ Behavior:
 - uploads output to host `POST /logs`
 - host stores a timestamped log file under `out/dev-logs/`
 
+## Running staged test scripts
+
+The reusable test scripts under `scripts/tests/` (e.g. `test_hidraw.sh`,
+`test_hidd_reconnect.sh`, the `test_gui_step*` checkpoint scripts) are copied into
+`out/dev-payload/` by `dev_stage_payload.sh` and served by `dev_http_serve.sh`
+alongside the binaries. They can be downloaded and run on the Deck in one step:
+
+```sh
+controlleros-dev-run \
+  --base-url http://<DEV_MACHINE_IP>:8000 \
+  --shell-script test_hidraw.sh
+```
+
+Behavior:
+
+- `--shell-script <name>` downloads `<name>` from `<base-url>/<name>`, makes it
+  executable, and runs it on the Deck; any trailing positional args are passed
+  through to the script.
+- Script stdout/stderr is uploaded to the host `POST /logs` like any other
+  `controlleros-dev-run` command, and stored under `out/dev-logs/`.
+- Each script runs with `CONTROLLEROS_DEV_BASE_URL` exported, so it can POST
+  live progress messages to the server's `/send-instruction` endpoint — these
+  are printed on the host terminal running `dev_http_serve.sh` for real-time
+  feedback while the script executes.
+
 ## When You Still Need Rebuild + Reboot
 
 Perform `./scripts/build.sh` and reboot only for changes to:

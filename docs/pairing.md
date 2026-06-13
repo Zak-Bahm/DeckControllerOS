@@ -52,26 +52,6 @@ sudo evtest
 # Select "ControllerOS Xbox Controller"
 ```
 
-## Host end-to-end validation script (Checkpoint 03+)
-
-Run from this repo on a Linux host:
-
-```sh
-./scripts/bt_checkpoint03_host_validate.sh
-```
-
-What it validates:
-- discovery of the ControllerOS target
-- pair + trust + connect flow
-- host-side input node appearance
-- changing input events during the test-pattern window
-
-Default target name:
-- Derived from `configs/bluez/main.conf` (`Name=`).
-- Current default: `ControllerOS Xbox Controller`.
-
-Logs are written to `out/host-logs/`.
-
 ## Debug capture
 
 If pairing fails, capture Deck-side logs with:

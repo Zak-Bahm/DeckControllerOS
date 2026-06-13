@@ -94,17 +94,6 @@ controlleros-dev-debug bt-info <MAC>
 controlleros-dev-debug bt-remove <MAC or name>
 ```
 
-## Host-side validation (checkpoint 03+)
-
-Run from this repo on a Linux host:
-```bash
-./scripts/bt_checkpoint03_host_validate.sh
-```
-- Default target name: `ControllerOS Xbox Controller` (from `configs/bluez/main.conf`).
-- Logs written to `out/host-logs/`.
-- Expected result:
-  - `PASS: Host discovered, paired, trusted, connected, and observed changing input pattern`
-
 ## Development loops (fast iteration)
 
 Use two loops to avoid frequent full image rebuild + reboot:
