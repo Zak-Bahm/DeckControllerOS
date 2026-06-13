@@ -26,7 +26,7 @@ DEFCONFIG="$ROOT_DIR/configs/buildroot/controlleros_defconfig"
 OUTPUT_ISO="$ROOT_DIR/out/controlleros.iso"
 CONFIG_HASH_FILE="$OUT_DIR/.last_defconfig_hash"
 
-RUST_PACKAGES="hidd controllerosctl controlleros-gui"
+RUST_PACKAGES="controlleros-hidd controllerosctl controlleros-gui"
 
 make -C "$BUILDROOT_DIR" \
   O="$OUT_DIR" \
@@ -42,6 +42,22 @@ if [ "$CLEAN_RUST" -eq 1 ]; then
       O="$OUT_DIR" \
       BR2_EXTERNAL="$BR2_EXTERNAL_DIR" \
       "${pkg}-dirclean" 2>/dev/null || true
+  done
+else
+  # These are local-source packages: once .stamp_built exists, an ordinary
+  # incremental build neither re-syncs the crate sources nor recompiles them,
+  # so it silently ships a stale binary (this is exactly how a pre-change hidd
+  # got shipped against a post-change config). Drop the rsync/build/install
+  # stamps so the next make re-syncs crates/, recompiles (cargo stays
+  # incremental, so this is cheap), and reinstalls — without a full re-vendor.
+  # Use --clean-rust for a complete reset (re-vendor + scratch rebuild).
+  for pkg in $RUST_PACKAGES; do
+    rm -f "$OUT_DIR/build/$pkg-"*/.stamp_rsynced \
+          "$OUT_DIR/build/$pkg-"*/.stamp_built \
+          "$OUT_DIR/build/$pkg-"*/.stamp_target_installed \
+          "$OUT_DIR/build/$pkg-"*/.stamp_staging_installed \
+          "$OUT_DIR/build/$pkg-"*/.stamp_host_installed \
+          "$OUT_DIR/build/$pkg-"*/.stamp_installed 2>/dev/null || true
   done
 fi
 
