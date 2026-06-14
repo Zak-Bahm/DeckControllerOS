@@ -1,7 +1,7 @@
 #!/bin/sh
 # Test script for GUI Step 3: First render on Deck via DRM/KMS
 # Run on Deck via:
-#   controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test_gui_step3_render.sh
+#   cosd-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test_gui_step3_render.sh
 
 PASS_COUNT=0
 FAIL_COUNT=0

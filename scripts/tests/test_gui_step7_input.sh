@@ -13,7 +13,7 @@
 #   - Buttons, sticks, and triggers register as Xbox controller input
 #
 # Run on Deck via:
-#   controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test_gui_step7_input.sh
+#   cosd-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test_gui_step7_input.sh
 
 PASS_COUNT=0
 FAIL_COUNT=0

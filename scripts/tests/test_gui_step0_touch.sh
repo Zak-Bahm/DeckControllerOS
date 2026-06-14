@@ -2,10 +2,10 @@
 # Test script for GUI Step 0: Manual touchscreen verification
 # Reads raw input events from the touchscreen for 10 seconds.
 # Run on Deck via:
-#   controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --timeout-seconds 20 --shell-script test_gui_step0_touch.sh
+#   cosd-run --base-url http://<DEV_MACHINE_IP>:8000 --timeout-seconds 20 --shell-script test_gui_step0_touch.sh
 
 # Send a live message to the dev-payload server via POST /send-instruction.
-# Uses CONTROLLEROS_DEV_BASE_URL exported by controlleros-dev-run.
+# Uses CONTROLLEROS_DEV_BASE_URL exported by cosd-run.
 live_msg() {
     MSG="$1"
     if [ -z "${CONTROLLEROS_DEV_BASE_URL:-}" ]; then

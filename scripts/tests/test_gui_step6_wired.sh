@@ -1,7 +1,7 @@
 #!/bin/sh
 # Test script for GUI Step 6: BlueZ backend wired to Slint UI
 # Run on Deck via:
-#   controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test_gui_step6_wired.sh
+#   cosd-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test_gui_step6_wired.sh
 
 export RUST_LOG=debug
 

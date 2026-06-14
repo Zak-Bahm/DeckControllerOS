@@ -2,7 +2,7 @@
 # Test script for hidd reconnection: auto-trust and advertisement re-registration
 # Guided interactive test — gives directions and waits for each step.
 # Run on Deck via:
-#   controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test_hidd_reconnect.sh
+#   cosd-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test_hidd_reconnect.sh
 
 PASS_COUNT=0
 FAIL_COUNT=0

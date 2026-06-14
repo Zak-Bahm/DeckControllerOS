@@ -1,7 +1,7 @@
 #!/bin/sh
 # Test script for GUI Step 5: BlueZ D-Bus client module
 # Run on Deck via:
-#   controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test_gui_step5_bluez.sh
+#   cosd-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test_gui_step5_bluez.sh
 
 PASS_COUNT=0
 FAIL_COUNT=0

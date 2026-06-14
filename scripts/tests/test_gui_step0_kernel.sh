@@ -1,14 +1,14 @@
 #!/bin/sh
 # Test script for GUI Step 0: Kernel config — AMD GPU and touchscreen drivers
 # Run on Deck via:
-#   controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test_gui_step0_kernel.sh
+#   cosd-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test_gui_step0_kernel.sh
 
 PASS_COUNT=0
 FAIL_COUNT=0
 
 # Send a live message to the dev-payload server via POST /send-instruction so
 # the tester can follow along in real time on the server console.
-# Uses CONTROLLEROS_DEV_BASE_URL exported by controlleros-dev-run.
+# Uses CONTROLLEROS_DEV_BASE_URL exported by cosd-run.
 live_msg() {
     MSG="$1"
     if [ -z "${CONTROLLEROS_DEV_BASE_URL:-}" ]; then

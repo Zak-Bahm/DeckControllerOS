@@ -2,18 +2,20 @@
 
 set -eu
 
-BASE_URL=""
+_DEFAULT_BASE_URL="@@BUILD_BASE_URL@@"   # replaced at build time by post-build.sh
+BASE_URL="$_DEFAULT_BASE_URL"
 ENDPOINT="/logs"
 TIMEOUT_SECONDS=""
 COMMAND=""
 SHELL_SCRIPT=""
 
 usage() {
-	echo "Usage: $0 --base-url <http://host:port> [--endpoint </path>] [--timeout-seconds <n>] [--shell-script <name>] [<shell-command>]"
+	echo "Usage: $0 [-u <http://host:port>] [-e </path>] [-t <n>] [-s <name>] [<shell-command>]"
+	echo "       $0 [--base-url <http://host:port>] [--endpoint </path>] [--timeout-seconds <n>] [--shell-script <name>] [<shell-command>]"
 	echo "Example:"
-	echo "  $0 --base-url http://192.168.1.10:8000 \"controlleros-dev-debug all\""
-	echo "  $0 --base-url http://192.168.1.10:8000 --timeout-seconds 10 \"controlleros-dev-debug hidd-run\""
-	echo "  $0 --base-url http://192.168.1.10:8000 --timeout-seconds 20 --shell-script test_step0_axes.sh"
+	echo "  $0 -u http://192.168.1.10:8000 \"cosd-debug all\""
+	echo "  $0 -u http://192.168.1.10:8000 -t 10 \"cosd-debug hidd-run\""
+	echo "  $0 -u http://192.168.1.10:8000 -t 20 -s test_step0_axes.sh"
 }
 
 extract_base_url_host() {
@@ -30,7 +32,7 @@ extract_base_url_host() {
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
-		--base-url)
+		--base-url|-u)
 			[ "$#" -ge 2 ] || {
 				echo "error: $1 requires a value" >&2
 				usage >&2
@@ -39,27 +41,27 @@ while [ "$#" -gt 0 ]; do
 			BASE_URL="$2"
 			shift 2
 			;;
-		--endpoint)
+		--endpoint|-e)
 			[ "$#" -ge 2 ] || {
-				echo "error: --endpoint requires a value" >&2
+				echo "error: $1 requires a value" >&2
 				usage >&2
 				exit 1
 			}
 			ENDPOINT="$2"
 			shift 2
 			;;
-		--timeout-seconds)
+		--timeout-seconds|-t)
 			[ "$#" -ge 2 ] || {
-				echo "error: --timeout-seconds requires a value" >&2
+				echo "error: $1 requires a value" >&2
 				usage >&2
 				exit 1
 			}
 			TIMEOUT_SECONDS="$2"
 			shift 2
 			;;
-		--shell-script)
+		--shell-script|-s)
 			[ "$#" -ge 2 ] || {
-				echo "error: --shell-script requires a value" >&2
+				echo "error: $1 requires a value" >&2
 				usage >&2
 				exit 1
 			}
@@ -97,7 +99,7 @@ else
 fi
 
 [ -n "$BASE_URL" ] || {
-	echo "error: --base-url is required" >&2
+	echo "error: --base-url is required (or rebuild the image to bake in the host IP)" >&2
 	usage >&2
 	exit 1
 }
@@ -126,13 +128,13 @@ fi
 
 # Bootstrap networking if needed.
 BASE_HOST="$(extract_base_url_host "$BASE_URL")"
-if command -v controlleros-dev-debug >/dev/null 2>&1; then
-	controlleros-dev-debug net-setup "$BASE_HOST" || true
+if command -v cosd-debug >/dev/null 2>&1; then
+	cosd-debug net-setup "$BASE_HOST" || true
 fi
 
 # Download and prepare shell script if requested.
 if [ -n "$SHELL_SCRIPT" ]; then
-	TMP_SCRIPT="$(mktemp /tmp/controlleros-dev-run.script.XXXXXX)"
+	TMP_SCRIPT="$(mktemp /tmp/cosd-run.script.XXXXXX)"
 	SCRIPT_URL="$BASE_URL/$SHELL_SCRIPT"
 	echo "Downloading script: $SCRIPT_URL"
 	if command -v wget >/dev/null 2>&1; then
@@ -152,9 +154,9 @@ export CONTROLLEROS_DEV_BASE_URL="$BASE_URL"
 POST_URL="$BASE_URL$ENDPOINT"
 HOSTNAME="$(hostname 2>/dev/null || echo deck)"
 TIMESTAMP_UTC="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)"
-TMP_OUT="$(mktemp /tmp/controlleros-dev-run.out.XXXXXX)"
-TMP_PAYLOAD="$(mktemp /tmp/controlleros-dev-run.payload.XXXXXX)"
-TMP_TIMEOUT_FLAG="$(mktemp /tmp/controlleros-dev-run.timeout.XXXXXX)"
+TMP_OUT="$(mktemp /tmp/cosd-run.out.XXXXXX)"
+TMP_PAYLOAD="$(mktemp /tmp/cosd-run.payload.XXXXXX)"
+TMP_TIMEOUT_FLAG="$(mktemp /tmp/cosd-run.timeout.XXXXXX)"
 trap 'rm -f "$TMP_OUT" "$TMP_PAYLOAD" "$TMP_TIMEOUT_FLAG" "${TMP_SCRIPT:-}"' EXIT INT TERM
 
 list_child_pids() {

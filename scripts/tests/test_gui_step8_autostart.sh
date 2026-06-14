@@ -2,7 +2,7 @@
 # Test script for GUI Step 8: Init script, auto-start, and startup splash screen
 # Run AFTER a fresh boot — do NOT launch GUI manually first.
 # Run on Deck via:
-#   controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test_gui_step8_autostart.sh
+#   cosd-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test_gui_step8_autostart.sh
 
 PASS_COUNT=0
 FAIL_COUNT=0

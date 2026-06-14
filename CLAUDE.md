@@ -71,8 +71,9 @@ Staging `--gui` deploys `controlleros-gui` to the Deck (installed to `/usr/bin/`
 
 **4. On Deck — pull and apply:**
 ```sh
-controlleros-dev-update --base-url http://<HOST_IP>:8000
-controlleros-dev-list   # verify deployed files
+cosd-update            # uses baked-in default URL
+cosd-update -u http://<HOST_IP>:8000  # override URL
+cosd-list              # verify deployed files
 ```
 
 Deployed files land at `/var/lib/controlleros/dev/bin/` and `/var/lib/controlleros/dev/configs/`.
@@ -106,36 +107,37 @@ All tools below are installed in the ControllerOS image.
 
 ```sh
 # Quick health check
-controlleros-dev-debug all
+cosd-debug all
 
 # Bluetooth
-controlleros-dev-debug bt-status      # adapter state + paired devices
-controlleros-dev-debug bt-pairing     # enable discoverable + pairable mode
-controlleros-dev-debug bt-scan        # scan for nearby BLE devices (10 s)
-controlleros-dev-debug bt-info <MAC>
-controlleros-dev-debug bt-remove <MAC or name>
+cosd-debug bt-status      # adapter state + paired devices
+cosd-debug bt-pairing     # enable discoverable + pairable mode
+cosd-debug bt-scan        # scan for nearby BLE devices (10 s)
+cosd-debug bt-info <MAC>
+cosd-debug bt-remove <MAC or name>
 
 # HID daemon
-controlleros-dev-debug hidd-status
-controlleros-dev-debug hidd-log [N]   # last N lines of /var/log/hidd.log
-controlleros-dev-debug hidd-restart
-controlleros-dev-debug hidd-run       # run in foreground (stops service first)
+cosd-debug hidd-status
+cosd-debug hidd-log [N]   # last N lines of /var/log/hidd.log
+cosd-debug hidd-restart
+cosd-debug hidd-run       # run in foreground (stops service first)
 
 # Networking
-controlleros-dev-debug net-setup <HOST_IP>   # bootstrap networking to reach dev host
+cosd-debug net-setup <HOST_IP>   # bootstrap networking to reach dev host
 
 # Self-test
-controlleros-dev-debug self-test
+cosd-debug self-test
 ```
 
 **Remote command + log capture from host** (output POSTed to dev server):
 ```sh
-controlleros-dev-run --base-url http://<HOST_IP>:8000 "<shell command>"
-controlleros-dev-run --base-url http://<HOST_IP>:8000 --timeout-seconds 10 "<command>"
-
-# Run a staged test script (from scripts/tests/) on the Deck — see docs/dev_testing_loops.md
-controlleros-dev-run --base-url http://<HOST_IP>:8000 --shell-script test_hidraw.sh
+cosd-run "<shell command>"                          # uses baked-in default URL
+cosd-run -u http://<HOST_IP>:8000 "<shell command>" # override URL
+cosd-run -t 10 "<command>"                          # with timeout
+cosd-run -s test_hidraw.sh                          # run a staged test script
 ```
+Short flags: `-u` (--base-url), `-t` (--timeout-seconds), `-s` (--shell-script), `-e` (--endpoint).
+Logs stored under `out/dev-logs/` on the host.
 Logs stored under `out/dev-logs/` on the host.
 
 ---

@@ -17,7 +17,7 @@ No manual steps are needed.
 
 To verify adapter state and paired devices:
 ```sh
-controlleros-dev-debug bt-status
+cosd-debug bt-status
 ```
 
 Expected adapter state:
@@ -27,7 +27,7 @@ Expected adapter state:
 
 To remove a paired device:
 ```sh
-controlleros-dev-debug bt-remove <MAC or device name>
+cosd-debug bt-remove <MAC or device name>
 ```
 
 ## Host pairing flow
@@ -56,10 +56,10 @@ sudo evtest
 
 If pairing fails, capture Deck-side logs with:
 ```sh
-controlleros-dev-run \
+cosd-run \
   --base-url http://<DEV_MACHINE_IP>:8000 \
   --timeout-seconds 30 \
-  "controlleros-dev-debug hidd-run"
+  "cosd-debug hidd-run"
 ```
 
 Check hidd logs for agent authorization messages and any D-Bus errors.

@@ -56,42 +56,42 @@ The image provides login gettys on `tty1`, `tty2`, and `tty3`.
   - `chvt 3`
 - On keyboards where VT hotkeys are supported, `Ctrl+Alt+F1/F2/F3` may also work.
 
-## On-Deck debugging (controlleros-dev-debug)
+## On-Deck debugging (cosd-debug)
 
-The `controlleros-dev-debug` tool is included in the ISO for development.
+The `cosd-debug` tool is included in the ISO for development.
 It consolidates Bluetooth and hidd diagnostics into a single command.
 
 ```bash
 # Quick health check (adapter state + hidd status + recent logs)
-controlleros-dev-debug all
+cosd-debug all
 
 # Enable pairing mode (discoverable + pairable + NoInputNoOutput agent)
-controlleros-dev-debug bt-pairing
+cosd-debug bt-pairing
 
 # Show adapter state and paired/connected devices
-controlleros-dev-debug bt-status
+cosd-debug bt-status
 
 # Show hidd process status and recent log output
-controlleros-dev-debug hidd-status
+cosd-debug hidd-status
 
 # View last N lines of hidd log (default 30)
-controlleros-dev-debug hidd-log 50
+cosd-debug hidd-log 50
 
 # Run hidd in foreground to see live output (stops the service first)
-controlleros-dev-debug hidd-run
+cosd-debug hidd-run
 
 # Restart the hidd service
-controlleros-dev-debug hidd-restart
+cosd-debug hidd-restart
 
 # Run the HID self-test
-controlleros-dev-debug self-test
+cosd-debug self-test
 
 # Scan for nearby BLE devices (10s)
-controlleros-dev-debug bt-scan
+cosd-debug bt-scan
 
 # Show detailed info / remove a paired device
-controlleros-dev-debug bt-info <MAC>
-controlleros-dev-debug bt-remove <MAC or name>
+cosd-debug bt-info <MAC>
+cosd-debug bt-remove <MAC or name>
 ```
 
 ## Development loops (fast iteration)
@@ -114,16 +114,16 @@ Host helper scripts:
 
 Deck-side scripts included in the ISO image:
 
-- `controlleros-dev-update`
-- `controlleros-dev-list`
-- `controlleros-dev-run`
-- `controlleros-dev-debug`
+- `cosd-update`
+- `cosd-list`
+- `cosd-run`
+- `cosd-debug`
 
 Upload Deck command logs to host during Loop 2:
 
 ```bash
-controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 "bluetoothctl show && /etc/init.d/S45hidd status"
-controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --timeout-seconds 10 "/var/lib/controlleros/dev/bin/hidd"
+cosd-run --base-url http://<DEV_MACHINE_IP>:8000 "bluetoothctl show && /etc/init.d/S45hidd status"
+cosd-run --base-url http://<DEV_MACHINE_IP>:8000 --timeout-seconds 10 "/var/lib/controlleros/dev/bin/hidd"
 ```
 
 This sends full command output (`stdout` + `stderr`) to the dev server log

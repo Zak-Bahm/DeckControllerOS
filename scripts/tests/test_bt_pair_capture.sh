@@ -16,7 +16,7 @@
 #   - dmesg bluetooth/hci/smp lines
 #
 # Run on Deck via:
-#   controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 \
+#   cosd-run --base-url http://<DEV_MACHINE_IP>:8000 \
 #       --timeout-seconds 120 --shell-script test_bt_pair_capture.sh
 #
 # Pair from a Linux/BlueZ host during the window with:

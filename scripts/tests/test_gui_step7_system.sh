@@ -1,7 +1,7 @@
 #!/bin/sh
 # Test script for GUI Step 7: System actions (reload stack, power off)
 # Run on Deck via:
-#   controlleros-dev-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test_gui_step7_system.sh
+#   cosd-run --base-url http://<DEV_MACHINE_IP>:8000 --shell-script test_gui_step7_system.sh
 
 PASS_COUNT=0
 FAIL_COUNT=0

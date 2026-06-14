@@ -1,11 +1,11 @@
 #!/bin/sh
 #
-# controlleros-dev-debug — on-Deck diagnostic tool for development.
-# Installed alongside the other controlleros-dev-* scripts.
+# cosd-debug — on-Deck diagnostic tool for development.
+# Installed alongside the other cosd-* scripts.
 # Not needed for production builds.
 #
 # Usage:
-#   controlleros-dev-debug <command>
+#   cosd-debug <command>
 #
 # Commands:
 #   bt-status      Show adapter state and paired devices

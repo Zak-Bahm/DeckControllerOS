@@ -158,7 +158,7 @@ if [ -n "$MAPPING_CONFIG" ]; then
 	copy_item "$MAPPING_CONFIG" "configs/mapping/xbox.toml" "0644"
 fi
 
-# Copy test scripts into payload root so controlleros-dev-run --shell-script can fetch them.
+# Copy test scripts into payload root so cosd-run --shell-script can fetch them.
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)/tests"
 if [ -d "$TESTS_DIR" ]; then
 	TEST_COUNT=0

@@ -72,13 +72,13 @@ This serves payload files and accepts Deck log uploads at:
 On ControllerOS shell:
 
 ```sh
-controlleros-dev-update --base-url http://<DEV_MACHINE_IP>:8000
+cosd-update --base-url http://<DEV_MACHINE_IP>:8000
 ```
 
 Optional with post-update restart command:
 
 ```sh
-controlleros-dev-update \
+cosd-update \
   --base-url http://<DEV_MACHINE_IP>:8000 \
   --restart-cmd "/etc/init.d/S40bluetoothd restart"
 ```
@@ -86,13 +86,13 @@ controlleros-dev-update \
 Optional dry-run validation:
 
 ```sh
-controlleros-dev-update --base-url http://<DEV_MACHINE_IP>:8000 --dry-run
+cosd-update --base-url http://<DEV_MACHINE_IP>:8000 --dry-run
 ```
 
 ### 5) Verify deployed files on Deck
 
 ```sh
-controlleros-dev-list
+cosd-list
 ```
 
 ## File Locations on Deck
@@ -106,17 +106,17 @@ No reboot is required for payload-only updates.
 
 ## Deck remote command log upload
 
-`controlleros-dev-run` executes a shell command on the Deck and uploads full
+`cosd-run` executes a shell command on the Deck and uploads full
 combined stdout/stderr output to the host dev server.
 
 Example:
 
 ```sh
-controlleros-dev-run \
+cosd-run \
   --base-url http://<DEV_MACHINE_IP>:8000 \
   "bluetoothctl show && /etc/init.d/S45hidd restart && /var/lib/controlleros/dev/bin/controllerosctl hid self-test --hidd /var/lib/controlleros/dev/bin/hidd --config /var/lib/controlleros/dev/configs/hid/hid.toml"
 
-controlleros-dev-run \
+cosd-run \
   --base-url http://<DEV_MACHINE_IP>:8000 \
   --timeout-seconds 10 \
   "/var/lib/controlleros/dev/bin/hidd"
@@ -138,7 +138,7 @@ The reusable test scripts under `scripts/tests/` (e.g. `test_hidraw.sh`,
 alongside the binaries. They can be downloaded and run on the Deck in one step:
 
 ```sh
-controlleros-dev-run \
+cosd-run \
   --base-url http://<DEV_MACHINE_IP>:8000 \
   --shell-script test_hidraw.sh
 ```
@@ -149,7 +149,7 @@ Behavior:
   executable, and runs it on the Deck; any trailing positional args are passed
   through to the script.
 - Script stdout/stderr is uploaded to the host `POST /logs` like any other
-  `controlleros-dev-run` command, and stored under `out/dev-logs/`.
+  `cosd-run` command, and stored under `out/dev-logs/`.
 - Each script runs with `CONTROLLEROS_DEV_BASE_URL` exported, so it can POST
   live progress messages to the server's `/send-instruction` endpoint — these
   are printed on the host terminal running `dev_http_serve.sh` for real-time

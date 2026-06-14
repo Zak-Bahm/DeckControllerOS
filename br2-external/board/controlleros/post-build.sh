@@ -33,18 +33,30 @@ chmod 0755 "${TARGET_DIR}/etc/init.d/S20dbus-prep" \
 	"${TARGET_DIR}/etc/init.d/S01gui"
 
 mkdir -p "${TARGET_DIR}/usr/bin"
-cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/dev/controlleros-dev-update" \
-	"${TARGET_DIR}/usr/bin/controlleros-dev-update"
-cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/dev/controlleros-dev-list" \
-	"${TARGET_DIR}/usr/bin/controlleros-dev-list"
-cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/dev/controlleros-dev-run" \
-	"${TARGET_DIR}/usr/bin/controlleros-dev-run"
-cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/dev/controlleros-dev-debug" \
-	"${TARGET_DIR}/usr/bin/controlleros-dev-debug"
-chmod 0755 "${TARGET_DIR}/usr/bin/controlleros-dev-update" \
-	"${TARGET_DIR}/usr/bin/controlleros-dev-list" \
-	"${TARGET_DIR}/usr/bin/controlleros-dev-run" \
-	"${TARGET_DIR}/usr/bin/controlleros-dev-debug"
+cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/dev/cosd-update" \
+	"${TARGET_DIR}/usr/bin/cosd-update"
+cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/dev/cosd-list" \
+	"${TARGET_DIR}/usr/bin/cosd-list"
+cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/dev/cosd-run" \
+	"${TARGET_DIR}/usr/bin/cosd-run"
+cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/dev/cosd-debug" \
+	"${TARGET_DIR}/usr/bin/cosd-debug"
+chmod 0755 "${TARGET_DIR}/usr/bin/cosd-update" \
+	"${TARGET_DIR}/usr/bin/cosd-list" \
+	"${TARGET_DIR}/usr/bin/cosd-run" \
+	"${TARGET_DIR}/usr/bin/cosd-debug"
+
+# Inject build-host IP as the default --base-url in cosd-run and cosd-update.
+BUILD_IP="$(ip route get 1 2>/dev/null \
+	| awk 'NR==1{for(i=1;i<=NF;i++){if($i=="src"){print $(i+1);exit}}}')" || true
+if [ -n "${BUILD_IP:-}" ]; then
+	BAKED="http://${BUILD_IP}:8000"
+else
+	BAKED=""
+fi
+sed -i "s|@@BUILD_BASE_URL@@|${BAKED}|g" \
+	"${TARGET_DIR}/usr/bin/cosd-run" \
+	"${TARGET_DIR}/usr/bin/cosd-update"
 
 mkdir -p "${TARGET_DIR}/etc/controlleros"
 cp -f "${BR2_EXTERNAL_CONTROLLEROS_PATH}/../configs/hid/hid.toml" \

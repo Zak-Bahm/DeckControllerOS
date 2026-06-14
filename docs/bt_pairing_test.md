@@ -15,7 +15,7 @@ HCI/SMP exchange, so you can see exactly *why* a pair aborts.
 
 ## What gets captured
 
-Deck side (uploaded inline in the `controlleros-dev-run` log under `out/dev-logs/`):
+Deck side (uploaded inline in the `cosd-run` log under `out/dev-logs/`):
 
 - **btmon** HCI/SMP trace (text) — the advertise → connect → SMP → encryption → ATT exchange.
 - **Verbose `bluetoothd -d`** log — SMP / authentication / "Pairing failed" reasons.
@@ -52,8 +52,8 @@ Host side (written to `out/dev-logs/`):
 
 2. **Deck — pull binaries, then start the capture (opens the pairing window):**
    ```sh
-   controlleros-dev-update --base-url http://<HOST_IP>:8000
-   controlleros-dev-run --base-url http://<HOST_IP>:8000 \
+   cosd-update --base-url http://<HOST_IP>:8000
+   cosd-run --base-url http://<HOST_IP>:8000 \
        --timeout-seconds 120 --shell-script test_bt_pair_capture.sh
    ```
    The deck POSTs a `READY: pair from host now (deck=<MAC>, window=…)` line to

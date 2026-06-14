@@ -2,7 +2,8 @@
 
 set -eu
 
-BASE_URL=""
+_DEFAULT_BASE_URL="@@BUILD_BASE_URL@@"   # replaced at build time by post-build.sh
+BASE_URL="$_DEFAULT_BASE_URL"
 TARGET_ROOT=""
 TARGET_ROOT_SET=0
 MANIFEST_NAME="manifest.txt"
@@ -24,7 +25,8 @@ resolve_system_path() {
 }
 
 usage() {
-	echo "Usage: $0 --base-url <http://host:port> [options]"
+	echo "Usage: $0 [-u <http://host:port>] [options]"
+	echo "       $0 [--base-url <http://host:port>] [options]"
 	echo ""
 	echo "Without --target-root, files are installed to their system locations:"
 	echo "  bin/hidd                  -> /usr/bin/hidd"
@@ -34,12 +36,12 @@ usage() {
 	echo "  configs/mapping/xbox.toml -> /etc/controlleros/mapping/xbox.toml"
 	echo ""
 	echo "Options:"
-	echo "  --base-url <url>       Base URL that serves manifest + payload files (required)"
-	echo "  --target-root <path>   Install root on Deck (files placed under <path>/<rel>)"
-	echo "  --manifest [name]      Manifest filename (default: manifest.txt)"
-	echo "  --restart-cmd <cmd>    Command to run after successful update"
-	echo "  --dry-run              Validate downloads/hashes without installing"
-	echo "  -h, --help             Show help"
+	echo "  -u, --base-url <url>       Base URL that serves manifest + payload files (required)"
+	echo "  -r, --target-root <path>   Install root on Deck (files placed under <path>/<rel>)"
+	echo "  -m, --manifest [name]      Manifest filename (default: manifest.txt)"
+	echo "  -c, --restart-cmd <cmd>    Command to run after successful update"
+	echo "  -n, --dry-run              Validate downloads/hashes without installing"
+	echo "  -h, --help                 Show help"
 }
 
 require_cmd() {
@@ -65,18 +67,18 @@ extract_base_url_host() {
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
-		--base-url)
+		--base-url|-u)
 			[ "$#" -ge 2 ] || {
-				echo "error: --base-url requires a value" >&2
+				echo "error: $1 requires a value" >&2
 				usage >&2
 				exit 1
 			}
 			BASE_URL="$2"
 			shift 2
 			;;
-		--target-root)
+		--target-root|-r)
 			[ "$#" -ge 2 ] || {
-				echo "error: --target-root requires a value" >&2
+				echo "error: $1 requires a value" >&2
 				usage >&2
 				exit 1
 			}
@@ -84,7 +86,7 @@ while [ "$#" -gt 0 ]; do
 			TARGET_ROOT_SET=1
 			shift 2
 			;;
-		--manifest)
+		--manifest|-m)
 			if [ "$#" -ge 2 ] && case "$2" in -*) false ;; *) true ;; esac; then
 				MANIFEST_NAME="$2"
 				shift 2
@@ -92,16 +94,16 @@ while [ "$#" -gt 0 ]; do
 				shift
 			fi
 			;;
-		--restart-cmd)
+		--restart-cmd|-c)
 			[ "$#" -ge 2 ] || {
-				echo "error: --restart-cmd requires a value" >&2
+				echo "error: $1 requires a value" >&2
 				usage >&2
 				exit 1
 			}
 			RESTART_CMD="$2"
 			shift 2
 			;;
-		--dry-run)
+		--dry-run|-n)
 			DRY_RUN=1
 			shift
 			;;
@@ -118,7 +120,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$BASE_URL" ] || {
-	echo "error: --base-url is required" >&2
+	echo "error: --base-url is required (or rebuild the image to bake in the host IP)" >&2
 	usage >&2
 	exit 1
 }
@@ -133,11 +135,11 @@ case "$BASE_URL" in
 esac
 
 BASE_HOST="$(extract_base_url_host "$BASE_URL")"
-if command -v controlleros-dev-debug >/dev/null 2>&1; then
-	controlleros-dev-debug net-setup "$BASE_HOST" || true
+if command -v cosd-debug >/dev/null 2>&1; then
+	cosd-debug net-setup "$BASE_HOST" || true
 fi
 
-TMP_DIR="$(mktemp -d /tmp/controlleros-dev-update.XXXXXX)"
+TMP_DIR="$(mktemp -d /tmp/cosd-update.XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 
 MANIFEST_PATH="$TMP_DIR/$MANIFEST_NAME"
