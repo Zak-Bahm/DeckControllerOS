@@ -307,21 +307,22 @@ fn run_daemon_live(cfg: &HidConfig, mapping_config_path: &str) -> Result<()> {
         }
         let report = reader.current_report();
         let report_bytes = report.to_bytes();
-        let result = if gate.should_publish(&report_bytes, Instant::now()) {
-            hog.publish_input_report(&report_bytes)
-        } else {
-            hog.pump()
-        };
-        absorb_publish_error(result, &mut gate, &mut publish_failures)?;
+        if gate.should_publish(&report_bytes, Instant::now()) {
+            let result = hog.publish_input_report(&report_bytes);
+            absorb_publish_error(result, &mut gate, &mut publish_failures)?;
+        }
         battery.tick(&hog, Instant::now());
         next_tick += period;
 
+        // Spend the idle part of the tick blocking on D-Bus (instead of
+        // thread::sleep) so incoming host connections, GATT reads/writes, and
+        // pairing-agent calls are actually read off the socket and dispatched.
         let now = Instant::now();
-        if next_tick > now {
-            thread::sleep(next_tick - now);
-        } else {
+        let wait = next_tick.saturating_duration_since(now);
+        if wait.is_zero() {
             next_tick = now;
         }
+        hog.pump_for(wait)?;
     }
 }
 
@@ -365,21 +366,21 @@ fn run_daemon_pattern(cfg: &HidConfig) -> Result<()> {
         let report = pattern.next_report();
         let report_bytes = report.to_bytes();
         uhid.send_input_report(&report_bytes)?;
-        let result = if gate.should_publish(&report_bytes, Instant::now()) {
-            hog.publish_input_report(&report_bytes)
-        } else {
-            hog.pump()
-        };
-        absorb_publish_error(result, &mut gate, &mut publish_failures)?;
+        if gate.should_publish(&report_bytes, Instant::now()) {
+            let result = hog.publish_input_report(&report_bytes);
+            absorb_publish_error(result, &mut gate, &mut publish_failures)?;
+        }
         battery.tick(&hog, Instant::now());
         next_tick += period;
 
+        // Block on D-Bus for the idle interval (see run_daemon_live) so host
+        // traffic is serviced rather than slept through.
         let now = Instant::now();
-        if next_tick > now {
-            thread::sleep(next_tick - now);
-        } else {
+        let wait = next_tick.saturating_duration_since(now);
+        if wait.is_zero() {
             next_tick = now;
         }
+        hog.pump_for(wait)?;
     }
 }
 

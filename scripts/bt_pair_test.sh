@@ -53,6 +53,10 @@ if ! command -v btmon >/dev/null 2>&1; then
     echo "error: btmon not found (install bluez)" >&2
     exit 1
 fi
+if ! command -v busctl >/dev/null 2>&1; then
+    echo "error: busctl not found (install systemd)" >&2
+    exit 1
+fi
 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$LOGS_DIR"
@@ -69,9 +73,31 @@ log()  { echo "$1" | tee -a "$REPORT"; }
 
 bctl() { bluetoothctl "$@" 2>&1 || true; }
 
-dev_field() {
-    # dev_field <mac> <FieldName>  (empty if absent; never fails under set -e)
-    bluetoothctl info "$1" 2>/dev/null | grep "$2:" | awk '{print $2}' || true
+dev_bool() {
+    # dev_bool <mac> <Device1 property> -> yes|no|"" (empty if unreadable)
+    # Reads the property straight off D-Bus: bluetoothctl info(1) does NOT print
+    # ServicesResolved, so parsing its output silently fails for that property.
+    local path="/org/bluez/$HCI/dev_${1//:/_}"
+    case "$(busctl get-property org.bluez "$path" org.bluez.Device1 "$2" 2>/dev/null)" in
+        *true*)  echo "yes" ;;
+        *false*) echo "no" ;;
+        *)       echo "" ;;
+    esac
+}
+
+scan_until_known() {
+    # scan_until_known <mac>  — scan until BlueZ has a device object for <mac>.
+    # BlueZ can only pair/connect a device it has actually seen advertise; the
+    # device object on D-Bus is created by discovery. Returns 0 once <mac> is
+    # known, 1 if it never appears within the window.
+    local mac="$1"
+    local deadline=$(( $(date +%s) + WINDOW ))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        bctl --timeout 6 scan on >/dev/null
+        if bluetoothctl info "$mac" >/dev/null 2>&1; then return 0; fi
+        log "  not seen yet, retrying scan..."
+    done
+    bluetoothctl info "$mac" >/dev/null 2>&1
 }
 
 cleanup() {
@@ -103,7 +129,18 @@ bctl agent on >/dev/null
 bctl default-agent >/dev/null
 
 # ---- Discover the target ----
-if [ -z "$DECK_MAC" ]; then
+# Either way we must scan so BlueZ creates the device object; without it,
+# pair/connect fail with "Device <mac> not available".
+if [ -n "$DECK_MAC" ]; then
+    log ""
+    log "Scanning to populate BlueZ cache for $DECK_MAC (up to ${WINDOW}s)..."
+    if ! scan_until_known "$DECK_MAC"; then
+        fail "BlueZ never saw $DECK_MAC advertise within ${WINDOW}s (is the Deck advertising?)"
+        log ""
+        log "=== Results: PASS=$PASS FAIL=$FAIL ==="
+        exit 1
+    fi
+else
     log ""
     log "Scanning for \"$DECK_NAME\" (up to ${WINDOW}s)..."
     deadline=$(( $(date +%s) + WINDOW ))
@@ -119,22 +156,35 @@ if [ -z "$DECK_MAC" ]; then
         [ -n "$DECK_MAC" ] && break
         log "  not found yet, retrying scan..."
     done
-fi
-
-if [ -z "$DECK_MAC" ]; then
-    fail "could not discover \"$DECK_NAME\" within ${WINDOW}s"
-    log ""
-    log "=== Results: PASS=$PASS FAIL=$FAIL ==="
-    exit 1
+    if [ -z "$DECK_MAC" ]; then
+        fail "could not discover \"$DECK_NAME\" within ${WINDOW}s"
+        log ""
+        log "=== Results: PASS=$PASS FAIL=$FAIL ==="
+        exit 1
+    fi
 fi
 pass "discovered target $DECK_MAC"
 
 # ---- Remove any stale bond so we exercise a fresh pair ----
+# remove deletes the device object entirely, so re-scan afterwards to recreate
+# it; otherwise the following pair fails with "not available".
 if bluetoothctl info "$DECK_MAC" >/dev/null 2>&1; then
     log "Removing stale bond for $DECK_MAC..."
     bctl remove "$DECK_MAC" >/dev/null
     sleep 1
+    log "Re-discovering $DECK_MAC after removal..."
+    if ! scan_until_known "$DECK_MAC"; then
+        fail "$DECK_MAC did not reappear after removal within ${WINDOW}s"
+        log ""
+        log "=== Results: PASS=$PASS FAIL=$FAIL ==="
+        exit 1
+    fi
 fi
+
+# Stop discovery before pairing: a running scan makes the controller time-slice
+# the radio into classic BR/EDR inquiry, starving the LE link during pair/connect
+# and polluting the btmon trace. The device object already exists at this point.
+bctl scan off >/dev/null
 
 # ---- Pair, trust, connect ----
 log ""
@@ -166,9 +216,9 @@ prev=""
 saw_resolved=0
 deadline=$(( $(date +%s) + WINDOW ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
-    c="$(dev_field "$DECK_MAC" Connected)"
-    p="$(dev_field "$DECK_MAC" Paired)"
-    s="$(dev_field "$DECK_MAC" ServicesResolved)"
+    c="$(dev_bool "$DECK_MAC" Connected)"
+    p="$(dev_bool "$DECK_MAC" Paired)"
+    s="$(dev_bool "$DECK_MAC" ServicesResolved)"
     [ "$s" = "yes" ] && saw_resolved=1
     cur="connected=$c paired=$p resolved=$s"
     if [ "$cur" != "$prev" ]; then
@@ -181,8 +231,8 @@ done
 
 # ---- Verdict ----
 log ""
-FINAL_C="$(dev_field "$DECK_MAC" Connected)"
-FINAL_S="$(dev_field "$DECK_MAC" ServicesResolved)"
+FINAL_C="$(dev_bool "$DECK_MAC" Connected)"
+FINAL_S="$(dev_bool "$DECK_MAC" ServicesResolved)"
 if [ "$FINAL_C" = "yes" ] && [ "$FINAL_S" = "yes" ]; then
     pass "central: connected with services resolved"
 else

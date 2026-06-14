@@ -213,6 +213,7 @@ pub struct HogRuntime {
     connected_devices: Arc<Mutex<HashSet<String>>>,
     bluez_lost: Arc<AtomicBool>,
     adv_needs_retry: Arc<AtomicBool>,
+    adv_registered: Arc<AtomicBool>,
 }
 
 impl HogRuntime {
@@ -543,6 +544,13 @@ impl HogRuntime {
         // handler uses it to recognize a failed registration and retry.
         let adv_register_serial = Arc::new(AtomicU32::new(0));
         let adv_serial_for_disconnect = Arc::clone(&adv_register_serial);
+        // Whether the LE advertisement is currently registered with BlueZ. Starts
+        // true (registered at startup, above). Cleared when we unregister on a
+        // stable connection, set again when we re-register on disconnect. Gates
+        // the unregister-on-connect so it fires exactly once per connection. Held
+        // on the struct too so the retry path keeps it consistent.
+        let adv_registered = Arc::new(AtomicBool::new(true));
+        let adv_registered_for_closure = Arc::clone(&adv_registered);
         let mut device_prop_rule =
             PropertiesPropertiesChanged::match_rule(None, None).static_clone();
         device_prop_rule.sender = Some(
@@ -566,10 +574,82 @@ impl HogRuntime {
                             );
                         }
 
-                        // Track stable connections via ServicesResolved.
+                        // Track stable connections via ServicesResolved. Once the
+                        // connection is fully established, stop advertising. The
+                        // Steam Deck LCD's Realtek RTL8822CE radio mishandles a
+                        // connectable advertising set left registered during an
+                        // active connection: BlueZ re-arms advertising mid-link and
+                        // the controller tears the connection down ("Unexpected
+                        // advertising set terminated event", peer sees a remote
+                        // LL_TERMINATE_IND). Unregistering removes BlueZ's ability
+                        // to re-arm; advertising is restored on disconnect below.
+                        // Gated on ServicesResolved (not Connected) so brief bounce
+                        // connections don't toggle advertising and the re-register
+                        // debounce stays intact.
                         if let Some(sr) = signal.changed_properties.get("ServicesResolved") {
                             if sr.as_i64() == Some(1) {
                                 had_stable_connection.store(true, Ordering::Relaxed);
+
+                                // Mark the device connected here too, not just in
+                                // the Connected branch below. On a FRESH (never
+                                // bonded) central, BlueZ creates the Device1 object
+                                // at connection time and reports the initial
+                                // Connected=true via InterfacesAdded — a signal we
+                                // do not subscribe to — so the Connected branch
+                                // never fires and the connected set stays empty.
+                                // ServicesResolved=true, by contrast, is always a
+                                // PropertiesChanged on an existing object, so it is
+                                // delivered on first connect. Without this, the very
+                                // first connection has an empty connected set,
+                                // any_connected() is false, and publish_input_report
+                                // silently drops every report until a reconnect
+                                // (when the object already exists and Connected=true
+                                // does arrive as a PropertiesChanged). Restore the
+                                // notifying flags too, mirroring the Connected
+                                // branch, for the same first-connect reason.
+                                let first_connection = match connected_for_closure.lock() {
+                                    Ok(mut set) => {
+                                        let was_empty = set.is_empty();
+                                        set.insert(obj_path.clone());
+                                        was_empty
+                                    }
+                                    Err(_) => false,
+                                };
+                                if first_connection {
+                                    if let Ok(mut s) = disconnect_state.lock() {
+                                        for slot in s.input_reports.values_mut() {
+                                            slot.notifying = true;
+                                        }
+                                        s.battery_notifying = true;
+                                    }
+                                    eprintln!(
+                                        "hidd: device connected (via ServicesResolved): {obj_path}"
+                                    );
+                                }
+
+                                if adv_registered_for_closure.swap(false, Ordering::AcqRel) {
+                                    eprintln!(
+                                        "hidd: stable connection established, \
+                                         unregistering advertisement on {}",
+                                        adv_adapter_path
+                                    );
+                                    let mut unreg = Message::method_call(
+                                        &BusName::new(BLUEZ_SERVICE).unwrap(),
+                                        &adv_adapter_path,
+                                        &Interface::new(BLUEZ_LE_ADV_MANAGER_IFACE).unwrap(),
+                                        &Member::new("UnregisterAdvertisement").unwrap(),
+                                    );
+                                    AppendAll::append(
+                                        &(adv_advertisement_path.clone(),),
+                                        &mut IterAppend::new(&mut unreg),
+                                    );
+                                    if conn.send(unreg).is_err() {
+                                        eprintln!(
+                                            "hidd: failed to send \
+                                             UnregisterAdvertisement on stable connect"
+                                        );
+                                    }
+                                }
                             }
                         }
 
@@ -664,6 +744,8 @@ impl HogRuntime {
                                         Ok(serial) => {
                                             adv_serial_for_disconnect
                                                 .store(serial, Ordering::Release);
+                                            adv_registered_for_closure
+                                                .store(true, Ordering::Release);
                                             eprintln!(
                                                 "hidd: sent RegisterAdvertisement \
                                                  (serial={serial})"
@@ -777,6 +859,7 @@ impl HogRuntime {
             connected_devices,
             bluez_lost,
             adv_needs_retry,
+            adv_registered,
         })
     }
 
@@ -801,8 +884,13 @@ impl HogRuntime {
 
     /// Drive pending D-Bus traffic (GATT reads/writes, signals) without
     /// publishing a report. Must be called regularly even when idle.
-    pub fn pump(&self) -> Result<()> {
-        self.process_pending_messages()
+    /// Pump D-Bus for the idle portion of a tick, blocking up to `timeout`
+    /// for incoming traffic. This is how host connections, GATT reads/writes,
+    /// and pairing-agent calls are serviced: a zero-timeout `process` does not
+    /// reliably read bytes off the socket, so the loop must block here (in
+    /// place of `thread::sleep`) for messages to be received at all.
+    pub fn pump_for(&self, timeout: Duration) -> Result<()> {
+        self.process_pending_messages_for(timeout)
     }
 
     pub fn publish_input_report(&self, report: &[u8]) -> Result<()> {
@@ -890,14 +978,26 @@ impl HogRuntime {
     }
 
     fn process_pending_messages(&self) -> Result<()> {
-        for _ in 0..8 {
+        self.process_pending_messages_for(Duration::from_millis(0))
+    }
+
+    /// Read and dispatch pending D-Bus messages. The first `process` call
+    /// blocks up to `first_wait` so that bytes are actually read off the
+    /// socket (libdbus `dbus_connection_read_write` with a zero timeout does
+    /// not reliably do so); once a message arrives, libdbus drains all
+    /// available data into its incoming queue, so the remaining iterations
+    /// pop those without blocking.
+    fn process_pending_messages_for(&self, first_wait: Duration) -> Result<()> {
+        let mut wait = first_wait;
+        for _ in 0..16 {
             let had_message = self
                 .conn
-                .process(Duration::from_millis(0))
+                .process(wait)
                 .map_err(|e| anyhow!("failed to process D-Bus traffic: {e}"))?;
             if !had_message {
                 break;
             }
+            wait = Duration::from_millis(0);
         }
         // Retry advertisement registration if a previous attempt failed.
         if self
@@ -908,7 +1008,10 @@ impl HogRuntime {
             eprintln!("hidd: retrying advertisement registration");
             if let Ok(adv_path) = dbus_path(ADVERTISEMENT_PATH) {
                 match register_advertisement(&self.conn, &self.adapter_path, &adv_path) {
-                    Ok(()) => eprintln!("hidd: advertisement retry succeeded"),
+                    Ok(()) => {
+                        self.adv_registered.store(true, Ordering::Release);
+                        eprintln!("hidd: advertisement retry succeeded");
+                    }
                     Err(e) => {
                         eprintln!("hidd: advertisement retry failed: {e}, will retry again");
                         self.adv_needs_retry.store(true, Ordering::Release);
